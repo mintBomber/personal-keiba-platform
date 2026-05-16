@@ -1,5 +1,8 @@
 import axios from 'axios';
-import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick, HorseSearchResult, RaceMeta, FavoriteHorse } from '../types';
+import {
+  Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick,
+  HorseSearchResult, RaceMeta, FavoriteHorse, HorseMemo, DeletedRaceEvent,
+} from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 // Update can take several minutes (3 years of data on first run)
@@ -12,6 +15,25 @@ export async function fetchSchedule(year: number, month: number): Promise<RaceSc
 
 export async function fetchRaces(date: string): Promise<Race[]> {
   const { data } = await api.get<Race[]>(`/races/${date}`);
+  return data;
+}
+
+export async function saveManualRace(race: Race, entries: HorseEntry[]): Promise<{ race: Race; entries: HorseEntry[] }> {
+  const { data } = await api.post<{ race: Race; entries: HorseEntry[] }>('/races/manual', { race, entries });
+  return data;
+}
+
+export async function deleteRace(raceId: string, date: string): Promise<void> {
+  await api.delete(`/races/${encodeURIComponent(raceId)}?date=${encodeURIComponent(date)}`);
+}
+
+export async function fetchDeletedRaceEvents(): Promise<DeletedRaceEvent[]> {
+  const { data } = await api.get<DeletedRaceEvent[]>('/races/deleted');
+  return data;
+}
+
+export async function restoreDeletedRace(raceId: string): Promise<DeletedRaceEvent> {
+  const { data } = await api.post<DeletedRaceEvent>(`/races/deleted/${encodeURIComponent(raceId)}/restore`);
   return data;
 }
 
@@ -49,6 +71,16 @@ export async function fetchPicks(raceId: string, refresh = false): Promise<RaceP
   return data;
 }
 
+export async function fetchUserPicks(raceId: string): Promise<RacePick> {
+  const { data } = await api.get<RacePick>(`/picks/user/${encodeURIComponent(raceId)}`);
+  return data;
+}
+
+export async function saveUserPicks(raceId: string, picks: RacePick): Promise<RacePick> {
+  const { data } = await api.put<RacePick>(`/picks/user/${encodeURIComponent(raceId)}`, picks);
+  return data;
+}
+
 export async function searchHorse(name: string): Promise<HorseSearchResult[]> {
   const { data } = await api.get<HorseSearchResult[]>(`/horses/search?name=${encodeURIComponent(name)}`);
   return data;
@@ -66,4 +98,14 @@ export async function addFavoriteHorse(horseId: string, horseName: string): Prom
 
 export async function removeFavoriteHorse(horseId: string): Promise<void> {
   await api.delete(`/horses/favorites/${horseId}`);
+}
+
+export async function fetchHorseMemo(horseId: string): Promise<HorseMemo> {
+  const { data } = await api.get<HorseMemo>(`/horses/${horseId}/memo`);
+  return data;
+}
+
+export async function saveHorseMemo(horseId: string, note: string): Promise<HorseMemo> {
+  const { data } = await api.put<HorseMemo>(`/horses/${horseId}/memo`, { note });
+  return data;
 }

@@ -1,6 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { RaceScheduleDay, Race, HorseEntry, HorseDetail, HorseSearchResult, FavoriteHorse, RaceMeta, RacePick } from './types';
+import {
+  RaceScheduleDay,
+  Race,
+  HorseEntry,
+  HorseDetail,
+  HorseSearchResult,
+  FavoriteHorse,
+  RaceMeta,
+  RacePick,
+  HorseMemo,
+  DeletedRaceEvent,
+} from './types';
 
 const DATA_DIR = path.join(__dirname, '../data');
 
@@ -20,6 +31,10 @@ function readJson<T>(filePath: string): T | null {
 function writeJson(filePath: string, data: unknown): void {
   ensureDir(path.dirname(filePath));
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function deleteJson(filePath: string): void {
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
 function keyToFileName(key: string): string {
@@ -50,6 +65,48 @@ export function saveRaces(date: string, races: Race[]): void {
   writeJson(file, races);
 }
 
+// ── Deleted race markers ──────────────────────────────────
+
+function deletedRaceFile(): string {
+  return path.join(DATA_DIR, 'deleted-races.json');
+}
+
+function isDeletedEvent(value: unknown): value is DeletedRaceEvent {
+  const event = value as DeletedRaceEvent;
+  return Boolean(event?.race?.id && event?.race?.date && event.deletedAt);
+}
+
+export function loadDeletedRaceEvents(): DeletedRaceEvent[] {
+  const file = deletedRaceFile();
+  const raw = readJson<unknown[]>(file) ?? [];
+  const events = raw.filter(isDeletedEvent);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const fresh = events.filter(event => new Date(event.deletedAt).getTime() >= cutoff);
+  if (fresh.length !== events.length || raw.length !== events.length) {
+    writeJson(file, fresh);
+  }
+  return fresh.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+}
+
+export function loadDeletedRaceIds(): string[] {
+  return loadDeletedRaceEvents().map(event => event.race.id);
+}
+
+export function markDeletedRace(race: Race, entries: HorseEntry[]): void {
+  const events = loadDeletedRaceEvents().filter(event => event.race.id !== race.id);
+  events.unshift({ race, entries, deletedAt: new Date().toISOString() });
+  writeJson(deletedRaceFile(), events);
+}
+
+export function unmarkDeletedRace(raceId: string): void {
+  const events = loadDeletedRaceEvents().filter(event => event.race.id !== raceId);
+  writeJson(deletedRaceFile(), events);
+}
+
+export function findDeletedRaceEvent(raceId: string): DeletedRaceEvent | null {
+  return loadDeletedRaceEvents().find(event => event.race.id === raceId) ?? null;
+}
+
 // ── Race metadata and picks ───────────────────────────────
 
 export function loadRaceMeta(raceId: string): RaceMeta | null {
@@ -72,6 +129,30 @@ export function saveRacePicks(raceId: string, picks: RacePick): void {
   writeJson(file, picks);
 }
 
+export function loadUserRacePicks(raceId: string): RacePick | null {
+  const file = path.join(DATA_DIR, 'user-picks', `${keyToFileName(raceId)}.json`);
+  return readJson<RacePick>(file);
+}
+
+export function saveUserRacePicks(raceId: string, picks: RacePick): RacePick {
+  const saved: RacePick = { ...picks, source: '自分の予想' };
+  const file = path.join(DATA_DIR, 'user-picks', `${keyToFileName(raceId)}.json`);
+  writeJson(file, saved);
+  return saved;
+}
+
+export function deleteUserRacePicks(raceId: string): void {
+  deleteJson(path.join(DATA_DIR, 'user-picks', `${keyToFileName(raceId)}.json`));
+}
+
+export function deleteRaceMeta(raceId: string): void {
+  deleteJson(path.join(DATA_DIR, 'race-meta', `${raceId}.json`));
+}
+
+export function deleteRacePicks(raceId: string): void {
+  deleteJson(path.join(DATA_DIR, 'race-picks', `${raceId}.json`));
+}
+
 // ── Shutuba (entry list per race) ─────────────────────────
 
 export function loadShutuba(raceId: string): HorseEntry[] | null {
@@ -84,6 +165,10 @@ export function saveShutuba(raceId: string, entries: HorseEntry[]): void {
   writeJson(file, entries);
 }
 
+export function deleteShutuba(raceId: string): void {
+  deleteJson(path.join(DATA_DIR, 'shutuba', `${raceId}.json`));
+}
+
 // ── Horse detail ──────────────────────────────────────────
 
 export function loadHorse(horseId: string): HorseDetail | null {
@@ -94,6 +179,18 @@ export function loadHorse(horseId: string): HorseDetail | null {
 export function saveHorse(horseId: string, detail: HorseDetail): void {
   const file = path.join(DATA_DIR, 'horses', `${horseId}.json`);
   writeJson(file, detail);
+}
+
+export function loadHorseMemo(horseId: string): HorseMemo {
+  const file = path.join(DATA_DIR, 'horse-memos', `${horseId}.json`);
+  return readJson<HorseMemo>(file) ?? { horseId, note: '', updatedAt: '' };
+}
+
+export function saveHorseMemo(horseId: string, note: string): HorseMemo {
+  const memo: HorseMemo = { horseId, note, updatedAt: new Date().toISOString() };
+  const file = path.join(DATA_DIR, 'horse-memos', `${horseId}.json`);
+  writeJson(file, memo);
+  return memo;
 }
 
 // ── Horse search and favorites ────────────────────────────

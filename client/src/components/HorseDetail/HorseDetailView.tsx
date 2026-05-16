@@ -1,6 +1,13 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { HorseDetail, HorseRaceHistory, View } from '../../types';
-import { addFavoriteHorse, fetchFavoriteHorses, fetchHorse, removeFavoriteHorse } from '../../api/client';
+import {
+  addFavoriteHorse,
+  fetchFavoriteHorses,
+  fetchHorse,
+  fetchHorseMemo,
+  removeFavoriteHorse,
+  saveHorseMemo,
+} from '../../api/client';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
@@ -175,6 +182,9 @@ export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [favorite, setFavorite] = useState(false);
+  const [memo, setMemo] = useState('');
+  const [memoSaving, setMemoSaving] = useState(false);
+  const [memoSavedAt, setMemoSavedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -192,7 +202,21 @@ export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
       .catch(() => undefined);
   }, [horseId]);
 
+  useEffect(() => {
+    fetchHorseMemo(horseId)
+      .then(data => {
+        setMemo(data.note);
+        setMemoSavedAt(data.updatedAt);
+      })
+      .catch(() => undefined);
+  }, [horseId]);
+
   const displayName = detail?.horseName || horseName;
+  const statusText = detail?.deathDate
+    ? `${detail.deathDate} 没`
+    : detail?.retiredDate
+    ? `${detail.retiredDate} 引退`
+    : '';
 
   async function handleRefresh() {
     if (refreshing) return;
@@ -223,6 +247,18 @@ export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
     }
   }
 
+  async function handleSaveMemo() {
+    if (memoSaving) return;
+    setMemoSaving(true);
+    try {
+      const saved = await saveHorseMemo(horseId, memo);
+      setMemo(saved.note);
+      setMemoSavedAt(saved.updatedAt);
+    } finally {
+      setMemoSaving(false);
+    }
+  }
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
@@ -246,18 +282,21 @@ export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
               ★
             </button>
             {detail && (
-              <span className="text-sm text-gray-500 whitespace-nowrap">{detail.sex}{detail.age}歳</span>
+              <>
+                <span className="text-sm text-gray-500 whitespace-nowrap">{detail.sex}{detail.age}歳</span>
+                {statusText && (
+                  <span className="text-xs text-gray-500 whitespace-nowrap">{statusText}</span>
+                )}
+              </>
             )}
           </div>
-          {detail && (
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="text-sm px-3 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition disabled:opacity-50 whitespace-nowrap"
-            >
-              {refreshing ? '更新中...' : '更新'}
-            </button>
-          )}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="text-sm px-3 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition disabled:opacity-50 whitespace-nowrap"
+          >
+            {refreshing ? '更新中...' : '更新'}
+          </button>
         </div>
       </div>
 
@@ -361,6 +400,32 @@ export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
                 過去レース情報が取得できませんでした
               </div>
             )}
+
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3 border-b pb-2">
+                <h2 className="font-bold text-gray-700 text-sm">メモ</h2>
+                {memoSavedAt && (
+                  <span className="text-xs text-gray-400">
+                    保存済み {new Date(memoSavedAt).toLocaleString('ja-JP')}
+                  </span>
+                )}
+              </div>
+              <textarea
+                value={memo}
+                onChange={e => setMemo(e.target.value)}
+                className="w-full min-h-32 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                placeholder="この馬についてのメモを入力..."
+              />
+              <div className="flex justify-end mt-3">
+                <button
+                  onClick={handleSaveMemo}
+                  disabled={memoSaving}
+                  className="px-4 py-1.5 text-sm rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition disabled:opacity-50"
+                >
+                  {memoSaving ? '保存中...' : '保存'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

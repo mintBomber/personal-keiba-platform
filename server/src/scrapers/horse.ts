@@ -44,9 +44,15 @@ export async function scrapeHorse(horseId: string): Promise<HorseDetail> {
     $m('div.horse_title .txt_01').first().text().trim();
   const parsedSexAge = parseSexAge(sexAgeText);
   const sex = parsedSexAge.sex;
-  const age = parsedSexAge.age || deriveJapaneseRaceAge(birthDate) || 0;
   const trainer   = findTableValue($m, '調教師') ?? findTableValue($m, '担当') ?? '';
   const owner     = findTableValue($m, '馬主') ?? '';
+  const statusDates = mergeStatusDates(
+    parseHorseStatusDates(extractNetkeibaStatusText($m)),
+    await fetchWikipediaStatusDates(horseName).catch(() => ({})),
+  );
+  const age = statusDates.deathDate
+    ? deriveAgeAtDate(birthDate, statusDates.deathDate) || parsedSexAge.age || deriveJapaneseRaceAge(birthDate) || 0
+    : parsedSexAge.age || deriveJapaneseRaceAge(birthDate) || 0;
 
   // === Pedigree page: blood_table ===
   const $p = cheerio.load(pedHtml);
@@ -104,9 +110,130 @@ export async function scrapeHorse(horseId: string): Promise<HorseDetail> {
     owner,
     trainer,
     totalRecord: `${races.length}戦${races.filter(r => r.placement === '1').length}勝`,
+    retiredDate: statusDates.retiredDate,
+    deathDate: statusDates.deathDate,
     races,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function parseHorseStatusDates(text: string): { retiredDate?: string; deathDate?: string } {
+  const normalized = normalizeDigits(text).replace(/\s+/g, ' ');
+  const deathDate =
+    normalizeJapaneseDate(normalized.match(/(\d{4}年\d{1,2}月\d{1,2}日)\s*(?:死亡|没|死去|死没)/)?.[1]) ??
+    normalizeJapaneseDate(normalized.match(/(?:死亡|没|死去|死没)\s*(\d{4}年\d{1,2}月\d{1,2}日)/)?.[1]);
+  const retiredDate =
+    normalizeJapaneseDate(normalized.match(/(\d{4}年\d{1,2}月\d{1,2}日)\s*(?:引退|登録抹消|抹消)/)?.[1]) ??
+    normalizeJapaneseDate(normalized.match(/(?:引退日|登録抹消日|抹消日|引退|登録抹消|抹消)\s*[:：=]?\s*(\d{4}年\d{1,2}月\d{1,2}日)/)?.[1]);
+
+  return { retiredDate, deathDate };
+}
+
+function extractNetkeibaStatusText($: cheerio.CheerioAPI): string {
+  const chunks: string[] = [
+    $('div.horse_title').text(),
+  ];
+  const labels = ['引退日', '登録抹消日', '抹消日', '死亡日', '没年月日', '死没'];
+  for (const label of labels) {
+    const value = findTableValue($, label);
+    if (value) chunks.push(`${label} ${value}`);
+  }
+  return chunks.join(' ');
+}
+
+function mergeStatusDates(
+  primary: { retiredDate?: string; deathDate?: string },
+  fallback: { retiredDate?: string; deathDate?: string },
+): { retiredDate?: string; deathDate?: string } {
+  return {
+    retiredDate: primary.retiredDate ?? fallback.retiredDate,
+    deathDate: primary.deathDate ?? fallback.deathDate,
+  };
+}
+
+async function fetchWikipediaStatusDates(horseName: string): Promise<{ retiredDate?: string; deathDate?: string }> {
+  if (!horseName) return {};
+
+  const res = await axios.get('https://ja.wikipedia.org/w/api.php', {
+    headers: {
+      ...HEADERS,
+      'User-Agent': 'keiba-app/1.0 (local personal use; https://example.invalid)',
+      'Referer': 'https://ja.wikipedia.org/',
+    },
+    params: {
+      action: 'query',
+      format: 'json',
+      prop: 'revisions',
+      rvprop: 'content',
+      rvslots: 'main',
+      redirects: 1,
+      titles: horseName,
+    },
+    timeout: 15000,
+  });
+
+  const pages = res.data?.query?.pages ?? {};
+  const page = Object.values(pages)[0] as any;
+  const content = page?.revisions?.[0]?.slots?.main?.['*'] ?? page?.revisions?.[0]?.['*'] ?? '';
+  if (!content || typeof content !== 'string') return {};
+
+  return {
+    deathDate: extractWikipediaDeathDate(content),
+    retiredDate: extractWikipediaRetiredDate(content),
+  };
+}
+
+function extractWikipediaDeathDate(content: string): string | undefined {
+  return extractLastTemplateDate(content, ['死亡年月日と没年齢', '死亡年月日', '没年月日と没年齢', '没年月日']) ??
+    extractDateFromLabels(content, ['死没', '死亡日', '没年月日', '死亡年月日']);
+}
+
+function extractWikipediaRetiredDate(content: string): string | undefined {
+  return extractDateFromLabels(content, ['引退日', '登録抹消日', '抹消日', '引退', '登録抹消']) ??
+    extractContextDate(content, ['登録抹消', '抹消', '引退']);
+}
+
+function extractLastTemplateDate(content: string, templateNames: string[]): string | undefined {
+  for (const name of templateNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = content.match(new RegExp(`\\{\\{\\s*${escaped}\\s*\\|([^}]+)\\}\\}`, 'i'));
+    if (!match) continue;
+    const numbers = normalizeDigits(match[1]).split('|')
+      .map(part => parseInt(part.trim(), 10))
+      .filter(num => Number.isInteger(num));
+    if (numbers.length >= 3) {
+      const [year, month, day] = numbers.slice(-3);
+      return formatJapaneseDate(year, month, day);
+    }
+  }
+  return undefined;
+}
+
+function extractDateFromLabels(content: string, labels: string[]): string | undefined {
+  const normalized = normalizeDigits(content);
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const line = normalized.match(new RegExp(`(?:^|[\\n|])\\s*${escaped}\\s*=\\s*([^\\n]+)`, 'i'))?.[1];
+    const date = normalizeJapaneseDate(line?.match(/\d{4}年\d{1,2}月\d{1,2}日/)?.[0]);
+    if (date) return date;
+  }
+  return undefined;
+}
+
+function extractContextDate(content: string, keywords: string[]): string | undefined {
+  const normalized = normalizeDigits(content).replace(/\s+/g, ' ');
+  for (const keyword of keywords) {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const before = normalizeJapaneseDate(
+      normalized.match(new RegExp(`(\\d{4}年\\d{1,2}月\\d{1,2}日)[^。\\n]{0,40}${escaped}`))?.[1],
+    );
+    if (before) return before;
+    const after = normalizeJapaneseDate(
+      normalized.match(new RegExp(`${escaped}[^。\\n]{0,40}(\\d{4}年\\d{1,2}月\\d{1,2}日)`))?.[1],
+    );
+    if (after) return after;
+  }
+  return undefined;
 }
 
 function parseRaceHistory($: cheerio.CheerioAPI): HorseRaceHistory[] {
@@ -186,6 +313,38 @@ function deriveJapaneseRaceAge(birthDate: string): number {
   if (!birthYear) return 0;
 
   const age = new Date().getFullYear() - birthYear;
+  return age > 0 ? age : 0;
+}
+
+function parseJapaneseDate(value: string | undefined): { year: number; month: number; day: number } | null {
+  const match = normalizeDigits(value ?? '').match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+function formatJapaneseDate(year: number, month: number, day: number): string | undefined {
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+  return `${year}年${String(month).padStart(2, '0')}月${String(day).padStart(2, '0')}日`;
+}
+
+function normalizeJapaneseDate(value: string | undefined): string | undefined {
+  const parsed = parseJapaneseDate(value);
+  return parsed ? formatJapaneseDate(parsed.year, parsed.month, parsed.day) : undefined;
+}
+
+function deriveAgeAtDate(birthDate: string, targetDate: string): number {
+  const birth = parseJapaneseDate(birthDate);
+  const target = parseJapaneseDate(targetDate);
+  if (!birth || !target) return 0;
+
+  let age = target.year - birth.year;
+  if (target.month < birth.month || (target.month === birth.month && target.day < birth.day)) {
+    age--;
+  }
   return age > 0 ? age : 0;
 }
 

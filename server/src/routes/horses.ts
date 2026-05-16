@@ -5,9 +5,11 @@ import { scrapeHorse, searchHorse } from '../scrapers/horse';
 import {
   loadFavoriteHorses,
   loadHorse,
+  loadHorseMemo,
   loadHorseSearchResults,
   saveFavoriteHorses,
   saveHorse,
+  saveHorseMemo,
   saveHorseSearchResults,
 } from '../store';
 import type { FavoriteHorse, HorseDetail } from '../types';
@@ -53,6 +55,29 @@ router.delete('/favorites/:horseId', (req: Request, res: Response) => {
   res.status(204).send();
 });
 
+// GET /api/horses/:horseId/memo
+router.get('/:horseId/memo', (req: Request, res: Response) => {
+  const { horseId } = req.params;
+  if (!/^\d+$/.test(horseId)) {
+    res.status(400).json({ error: 'Invalid horse ID' });
+    return;
+  }
+
+  res.json(loadHorseMemo(horseId));
+});
+
+// PUT /api/horses/:horseId/memo
+router.put('/:horseId/memo', (req: Request, res: Response) => {
+  const { horseId } = req.params;
+  const note = typeof req.body?.note === 'string' ? req.body.note : '';
+  if (!/^\d+$/.test(horseId)) {
+    res.status(400).json({ error: 'Invalid horse ID' });
+    return;
+  }
+
+  res.json(saveHorseMemo(horseId, note));
+});
+
 // GET /api/horses/search?name=xxx  — must come before /:horseId
 router.get('/search', async (req: Request, res: Response) => {
   const name = req.query.name;
@@ -61,14 +86,10 @@ router.get('/search', async (req: Request, res: Response) => {
     return;
   }
   const query = name.trim();
+  const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
 
   try {
-    const cachedResults = loadHorseSearchResults(query);
-    if (cachedResults && cachedResults.length > 0) {
-      res.json(cachedResults);
-      return;
-    }
-
+    // 1. Search local horse files first
     const localResults: { horseId: string; horseName: string }[] = [];
     if (fs.existsSync(HORSES_DIR)) {
       const files = fs.readdirSync(HORSES_DIR);
@@ -80,13 +101,28 @@ router.get('/search', async (req: Request, res: Response) => {
             if (data.horseName && data.horseName.includes(query)) {
               localResults.push({ horseId: data.horseId, horseName: data.horseName });
             }
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
       }
     }
 
+    if (localResults.length > 0 && !forceRefresh) {
+      res.json(localResults);
+      return;
+    }
+
+    // 2. Check cache from a previous remote scrape (skip if forceRefresh)
+    if (!forceRefresh) {
+      const cachedResults = loadHorseSearchResults(query);
+      if (cachedResults && cachedResults.length > 0) {
+        res.json(cachedResults);
+        return;
+      }
+    }
+
+    // 3. Scrape netkeiba
     const remoteResults = await searchHorse(query);
     if (remoteResults.length > 0) {
       saveHorseSearchResults(query, remoteResults);
@@ -94,10 +130,13 @@ router.get('/search', async (req: Request, res: Response) => {
       return;
     }
 
+    // 4. Fall back to local results when forceRefresh caused us to bypass them
     if (localResults.length > 0) {
-      saveHorseSearchResults(query, localResults);
+      res.json(localResults);
+      return;
     }
-    res.json(localResults);
+
+    res.json([]);
   } catch (err) {
     console.error('Horse search error:', err);
     res.status(500).json({ error: 'Search failed' });
@@ -121,8 +160,13 @@ router.get('/:horseId', async (req: Request, res: Response) => {
 
   const stored = loadHorse(horseId);
   // Use stored data only when it has meaningful content (not an empty-scrape artifact)
-  if (!forceRefresh && stored && hasUsableHorseDetail(stored)) {
+  if (!forceRefresh && stored) {
     res.json(stored);
+    return;
+  }
+
+  if (!forceRefresh) {
+    res.status(404).json({ error: 'Horse detail is not saved locally' });
     return;
   }
 

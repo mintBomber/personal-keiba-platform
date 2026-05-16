@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
-import { RACECOURSES, UpdateResult } from '../../types';
-import { fetchSettings, saveSettings, runUpdate } from '../../api/client';
+import { DeletedRaceEvent, RACECOURSES, UpdateResult } from '../../types';
+import {
+  fetchDeletedRaceEvents,
+  fetchSettings,
+  restoreDeletedRace,
+  saveSettings,
+  runUpdate,
+} from '../../api/client';
 
 interface Props {
   onBack: () => void;
@@ -11,6 +17,9 @@ export default function SettingsView({ onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [deletedEvents, setDeletedEvents] = useState<DeletedRaceEvent[]>([]);
+  const [restoreTarget, setRestoreTarget] = useState<DeletedRaceEvent | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'ok' | 'error' } | null>(null);
   const [lastUpdate, setLastUpdate] = useState<UpdateResult | null>(null);
 
@@ -19,6 +28,9 @@ export default function SettingsView({ onBack }: Props) {
       .then(s => setSelected(new Set(s.favoriteTrackIds)))
       .catch(() => setMessage({ text: '設定の読み込みに失敗しました', type: 'error' }))
       .finally(() => setLoading(false));
+    fetchDeletedRaceEvents()
+      .then(setDeletedEvents)
+      .catch(() => undefined);
   }, []);
 
   function toggle(id: string) {
@@ -59,6 +71,22 @@ export default function SettingsView({ onBack }: Props) {
       setMessage({ text: '更新に失敗しました', type: 'error' });
     } finally {
       setUpdating(false);
+    }
+  }
+
+  async function handleRestoreDeletedEvent() {
+    if (!restoreTarget || restoring) return;
+    setRestoring(true);
+    setMessage(null);
+    try {
+      await restoreDeletedRace(restoreTarget.race.id);
+      setDeletedEvents(events => events.filter(event => event.race.id !== restoreTarget.race.id));
+      setRestoreTarget(null);
+      setMessage({ text: 'イベントを復元しました', type: 'ok' });
+    } catch {
+      setMessage({ text: 'イベントの復元に失敗しました', type: 'error' });
+    } finally {
+      setRestoring(false);
     }
   }
 
@@ -164,6 +192,42 @@ export default function SettingsView({ onBack }: Props) {
           )}
         </section>
 
+        {/* ── Deleted events ─────────────────────────────────── */ }
+        <section className="border-t border-gray-200 pt-6">
+          <h2 className="text-base font-bold text-gray-700 mb-1">削除したイベント</h2>
+          <p className="text-xs text-gray-500 mb-3">
+            削除してから30日以内のイベントを復元できます。
+          </p>
+
+          {deletedEvents.length === 0 ? (
+            <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded-lg p-3">
+              復元できる削除済みイベントはありません
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {deletedEvents.map(event => (
+                <button
+                  key={event.race.id}
+                  onClick={() => setRestoreTarget(event)}
+                  className="w-full text-left bg-white border border-gray-200 hover:border-blue-300 hover:bg-blue-50 rounded-lg px-3 py-2 transition"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800 truncate">
+                        {event.race.date} {event.race.racecourse} 第{event.race.raceNumber}レース {event.race.name}
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        削除日時: {new Date(event.deletedAt).toLocaleString('ja-JP')}
+                      </p>
+                    </div>
+                    <span className="text-xs text-blue-600 flex-shrink-0">復元</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* Message */}
         {message && (
           <div className={`rounded-lg p-3 text-sm ${
@@ -173,6 +237,36 @@ export default function SettingsView({ onBack }: Props) {
           </div>
         )}
       </div>
+      {restoreTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-96 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200">
+              <h2 className="font-bold text-gray-800 text-sm">このイベントを復元しますか</h2>
+            </div>
+            <div className="p-4">
+              <p className="text-sm text-gray-700 mb-4">
+                {restoreTarget.race.date} {restoreTarget.race.racecourse} 第{restoreTarget.race.raceNumber}レース {restoreTarget.race.name}
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setRestoreTarget(null)}
+                  disabled={restoring}
+                  className="px-3 py-1.5 text-sm rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition disabled:opacity-50"
+                >
+                  いいえ
+                </button>
+                <button
+                  onClick={handleRestoreDeletedEvent}
+                  disabled={restoring}
+                  className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-700 text-white transition disabled:opacity-50"
+                >
+                  {restoring ? '復元中...' : '復元する'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

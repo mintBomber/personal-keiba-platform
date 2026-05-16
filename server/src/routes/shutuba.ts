@@ -5,6 +5,14 @@ import { HorseEntry } from '../types';
 
 const router = Router();
 
+function isNetkeibaRaceId(raceId: string): boolean {
+  return /^\d{12}$/.test(raceId);
+}
+
+function isSafeLocalRaceId(raceId: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(raceId);
+}
+
 function attachWeightDiff(entries: HorseEntry[]): HorseEntry[] {
   return entries.map(entry => {
     if (!entry.horseId || entry.weight <= 0) return entry;
@@ -34,7 +42,7 @@ function hasUsableCachedEntries(raceId: string, entries: HorseEntry[]): boolean 
 router.get('/meta/:raceId', async (req: Request, res: Response) => {
   const { raceId } = req.params;
   const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
-  if (!/^\d{12}$/.test(raceId)) {
+  if (!isNetkeibaRaceId(raceId)) {
     res.status(400).json({ error: 'Invalid race ID' });
     return;
   }
@@ -46,6 +54,8 @@ router.get('/meta/:raceId', async (req: Request, res: Response) => {
         res.json(stored);
         return;
       }
+      res.status(404).json({ error: 'Race metadata is not saved locally' });
+      return;
     }
 
     const meta = await scrapeRaceMeta(raceId);
@@ -62,12 +72,17 @@ router.get('/:raceId', async (req: Request, res: Response) => {
   const { raceId } = req.params;
   const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
 
-  if (!/^\d{12}$/.test(raceId)) {
+  if (!isNetkeibaRaceId(raceId) && !isSafeLocalRaceId(raceId)) {
     res.status(400).json({ error: 'Invalid race ID' });
     return;
   }
 
   const stored = loadShutuba(raceId);
+
+  if (!isNetkeibaRaceId(raceId) || !forceRefresh) {
+    res.json(attachWeightDiff(stored ?? []));
+    return;
+  }
 
   // Cached past races from older scraper versions may be missing placements.
   // Re-scrape those once; result.html is empty before official results exist.

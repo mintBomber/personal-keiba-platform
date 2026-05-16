@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Race, RacePick, View } from '../../types';
+import { Race, RacePick, RACECOURSES, View } from '../../types';
 import { fetchRaces, fetchPicks } from '../../api/client';
 
 const SURFACE: Record<string, string> = { turf: '芝', dirt: 'ダ' };
@@ -87,18 +87,14 @@ function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
 
   return (
     <div className="ml-2 mb-2">
-      {hasDetailedPage ? (
-        <button
-          onClick={() => onNavigate({ type: 'raceDetail', raceId: race.id, race })}
-          className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-all group"
-        >
-          {content}
-        </button>
-      ) : (
-        <div className="w-full text-left px-2 py-1.5 rounded border border-transparent bg-white">
-          {content}
-        </div>
-      )}
+      <button
+        onClick={() => onNavigate({ type: 'raceDetail', raceId: race.id, race })}
+        className={`w-full text-left px-2 py-1.5 rounded border border-transparent transition-all group ${
+          hasDetailedPage ? 'hover:bg-blue-50 hover:border-blue-200' : 'bg-white hover:bg-yellow-50 hover:border-yellow-200'
+        }`}
+      >
+        {content}
+      </button>
     </div>
   );
 }
@@ -164,12 +160,43 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
     ? `${parseInt(y)}年${parseInt(m)}月${parseInt(d)}日`
     : null;
 
+  function handleAddManualRace() {
+    if (!selectedDate) return;
+    const baseCourse = races[0]
+      ? { id: races[0].racecourseId, name: races[0].racecourse }
+      : RACECOURSES.find(course => course.id === '05') ?? RACECOURSES[0];
+    const maxRaceNumber = races.reduce((max, race) => Math.max(max, race.raceNumber), 0);
+    const draft: Race = {
+      id: `manual-draft-${selectedDate}-${Date.now()}`,
+      raceNumber: maxRaceNumber + 1,
+      name: '',
+      date: selectedDate,
+      racecourseId: baseCourse.id,
+      racecourse: baseCourse.name,
+      horseCount: 18,
+      distance: 1,
+      surface: 'turf',
+      manual: true,
+      picks: { honmei: '---', taikou: '---', tanana: '---' },
+    };
+    onNavigate({ type: 'raceDetail', raceId: draft.id, race: draft });
+  }
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      <div className="px-3 py-2.5 bg-white border-b border-gray-200 flex-shrink-0">
+      <div className="px-3 py-2.5 bg-white border-b border-gray-200 flex-shrink-0 flex items-center justify-between gap-2">
         {dateLabel
           ? <h2 className="font-bold text-gray-800 text-sm">{dateLabel}のレース</h2>
           : <h2 className="text-gray-400 text-sm">日付を選択してください</h2>}
+        {selectedDate && (
+          <button
+            onClick={handleAddManualRace}
+            className="w-7 h-7 rounded bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 text-lg font-bold leading-none transition"
+            title="レースを手動追加"
+          >
+            +
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto py-2">

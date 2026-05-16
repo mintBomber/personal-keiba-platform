@@ -45,6 +45,7 @@ export interface Race {
   direction?: string;
   grade?: string;
   startTime?: string;
+  manual?: boolean;
   picks: RacePick;
 }
 
@@ -62,6 +63,18 @@ export interface FavoriteHorse {
   horseId: string;
   horseName: string;
   addedAt: string;
+}
+
+export interface HorseMemo {
+  horseId: string;
+  note: string;
+  updatedAt: string;
+}
+
+export interface DeletedRaceEvent {
+  race: Race;
+  entries: HorseEntry[];
+  deletedAt: string;
 }
 
 export interface HorseEntry {
@@ -116,6 +129,8 @@ export interface HorseDetail {
   owner: string;
   trainer: string;
   totalRecord: string;
+  retiredDate?: string;
+  deathDate?: string;
   races: HorseRaceHistory[];
   updatedAt: string;
 }
