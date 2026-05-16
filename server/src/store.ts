@@ -219,9 +219,36 @@ export function saveFavoriteHorses(favorites: FavoriteHorse[]): void {
 
 // ── Purchased tickets ─────────────────────────────────────
 
+const VALID_TICKET_TYPES = ['単勝', '複勝', '枠連', '馬連', '馬単', 'ワイド', '3連複', '3連単'];
+const VALID_PURCHASE_TYPES = ['通常', 'ボックス', 'フォーメーション'];
+
+function migrateTicket(item: unknown): PurchasedTicket {
+  const t = item as Record<string, unknown>;
+  return {
+    id: (t.id as string) ?? `migrated-${Date.now()}`,
+    ticketType: (VALID_TICKET_TYPES.includes(t.ticketType as string)
+      ? t.ticketType
+      : '単勝') as PurchasedTicket['ticketType'],
+    purchaseType: (VALID_PURCHASE_TYPES.includes(t.purchaseType as string)
+      ? t.purchaseType
+      : '通常') as PurchasedTicket['purchaseType'],
+    selections: Array.isArray(t.selections) ? (t.selections as number[]) : [],
+    formationSelections: Array.isArray(t.formationSelections)
+      ? (t.formationSelections as number[][])
+      : undefined,
+    unitAmount: typeof t.unitAmount === 'number'
+      ? t.unitAmount
+      : (typeof t.amount === 'number' ? (t.amount as number) : 0),
+    payoutAmount: typeof t.payoutAmount === 'number' ? t.payoutAmount : undefined,
+    createdAt: (t.createdAt as string) ?? new Date().toISOString(),
+  };
+}
+
 export function loadPurchasedTickets(raceId: string): PurchasedTicket[] {
   const file = path.join(DATA_DIR, 'purchased-tickets', `${keyToFileName(raceId)}.json`);
-  return readJson<PurchasedTicket[]>(file) ?? [];
+  const raw = readJson<unknown[]>(file);
+  if (!Array.isArray(raw)) return [];
+  return raw.map(migrateTicket);
 }
 
 export function savePurchasedTickets(raceId: string, tickets: PurchasedTicket[]): void {

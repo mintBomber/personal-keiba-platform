@@ -40,7 +40,7 @@ export default function App() {
   }
 
   if (view.type === 'bettingAnalysis') {
-    return <BettingAnalysisView onBack={() => navigate({ type: 'calendar' })} />;
+    return <BettingAnalysisView onBack={() => navigate({ type: 'calendar' })} onNavigate={navigate} />;
   }
 
   return (

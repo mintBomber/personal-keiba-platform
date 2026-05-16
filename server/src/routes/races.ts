@@ -249,7 +249,9 @@ router.get('/races/:date', async (req: Request, res: Response) => {
   }
 
   const stored = loadRaces(date);
-  res.json(filterDeletedRaces(stored ?? []));
+  // Inject date field since stored race objects may not have it
+  const races = filterDeletedRaces(stored ?? []).map(r => ({ ...r, date }));
+  res.json(races);
 });
 
 // GET /api/debug/fetch?url=... (dev only)

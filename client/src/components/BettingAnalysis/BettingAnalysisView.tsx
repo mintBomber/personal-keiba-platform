@@ -3,7 +3,7 @@ import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { BettingRecord, TicketType } from '../../types';
+import { BettingRecord, Race, TicketType, View } from '../../types';
 import { fetchBettingRecords } from '../../api/client';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -477,6 +477,99 @@ function CustomChartPanel({ records }: { records: BettingRecord[] }) {
   );
 }
 
+// ── Betting history table ──────────────────────────────────────────────────
+
+function formatSelections(record: BettingRecord): string {
+  if (record.purchaseType === 'フォーメーション' && record.formationSelections) {
+    return record.formationSelections.map(pos => pos.join('/')).join(' → ');
+  }
+  if (record.selections.length === 0) return '—';
+  return record.selections.join('-');
+}
+
+function recordToRace(r: BettingRecord): Race {
+  return {
+    id: r.raceId,
+    raceNumber: 0,
+    name: r.raceName,
+    date: r.raceDate,
+    racecourseId: r.raceId.length === 12 ? r.raceId.slice(4, 6) : '',
+    racecourse: r.racecourse,
+    horseCount: r.horseCount,
+    distance: r.distance,
+    surface: r.surface,
+    picks: { honmei: '---', taikou: '---', tanana: '---' },
+  };
+}
+
+function BettingHistoryTable({ records, onNavigate }: { records: BettingRecord[]; onNavigate: (v: View) => void }) {
+  const sorted = useMemo(
+    () => [...records].sort((a, b) =>
+      b.raceDate.localeCompare(a.raceDate) || b.createdAt.localeCompare(a.createdAt)
+    ),
+    [records]
+  );
+
+  if (sorted.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200">
+      <div className="px-4 py-2.5 border-b border-gray-100">
+        <span className="text-sm font-semibold text-gray-700">掛け履歴</span>
+        <span className="ml-2 text-xs text-gray-400">{sorted.length}件</span>
+      </div>
+      <div className="overflow-y-auto" style={{ maxHeight: '252px' }}>
+        <table className="w-full text-xs border-collapse">
+          <thead className="sticky top-0 bg-gray-50 z-10">
+            <tr>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">日付</th>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">レース</th>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">競馬場</th>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">条件</th>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">馬券</th>
+              <th className="text-left px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">購入内容</th>
+              <th className="text-right px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">掛金</th>
+              <th className="text-right px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">払戻</th>
+              <th className="text-right px-3 py-1.5 font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">収支</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => {
+              const payout = r.payoutAmount ?? 0;
+              const diff = payout - r.totalAmount;
+              const hasPayout = r.payoutAmount !== undefined;
+              const surface = r.surface === 'turf' ? '芝' : 'ダ';
+              return (
+                <tr key={r.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.raceDate}</td>
+                  <td className="px-3 py-1.5 max-w-[120px]">
+                    <button
+                      onClick={() => onNavigate({ type: 'raceDetail', raceId: r.raceId, race: recordToRace(r) })}
+                      className="text-blue-600 hover:underline truncate block max-w-full text-left"
+                      title={r.raceName}
+                    >{r.raceName}</button>
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.racecourse}</td>
+                  <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{surface}{r.distance > 0 ? `${r.distance}m` : '—'}</td>
+                  <td className="px-3 py-1.5 text-gray-700 whitespace-nowrap">{r.ticketType}</td>
+                  <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{formatSelections(r)}{r.combinations > 1 ? <span className="ml-1 text-gray-400">×{r.combinations}</span> : null}</td>
+                  <td className="px-3 py-1.5 text-right text-gray-700 whitespace-nowrap">¥{r.totalAmount.toLocaleString()}</td>
+                  <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {hasPayout ? <span className={payout > 0 ? 'text-green-600 font-medium' : 'text-gray-500'}>¥{payout.toLocaleString()}</span> : <span className="text-gray-300">—</span>}
+                  </td>
+                  <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                    {hasPayout ? <span className={diff >= 0 ? 'text-green-600 font-bold' : 'text-red-500'}>{diff >= 0 ? '+' : ''}¥{diff.toLocaleString()}</span> : <span className="text-gray-300">—</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Summary cards ──────────────────────────────────────────────────────────
 
 function SummaryCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
@@ -491,9 +584,9 @@ function SummaryCard({ label, value, sub, color }: { label: string; value: strin
 
 // ── Main view ──────────────────────────────────────────────────────────────
 
-interface Props { onBack: () => void }
+interface Props { onBack: () => void; onNavigate: (v: View) => void }
 
-export default function BettingAnalysisView({ onBack }: Props) {
+export default function BettingAnalysisView({ onBack, onNavigate }: Props) {
   const [records, setRecords] = useState<BettingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [mainTab, setMainTab] = useState<'preset' | 'custom'>('preset');
@@ -603,6 +696,8 @@ export default function BettingAnalysisView({ onBack }: Props) {
         ) : (
           <CustomChartPanel records={filtered} />
         )}
+
+        <BettingHistoryTable records={filtered} onNavigate={onNavigate} />
       </div>
     </div>
   );

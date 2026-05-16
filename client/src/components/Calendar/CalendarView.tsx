@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FavoriteHorse, HorseSearchResult, RaceScheduleDay, View } from '../../types';
-import { fetchFavoriteHorses, fetchPurchasedRaceIds, fetchSchedule, searchHorse } from '../../api/client';
+import { fetchFavoriteHorses, fetchPurchasedDates, fetchPurchasedRaceIds, fetchSchedule, searchHorse } from '../../api/client';
 import RacePanel from './RacePanel';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
@@ -58,17 +58,12 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
   }, [year, month]);
 
   useEffect(() => {
-    fetchPurchasedRaceIds().then(ids => {
-      setPurchasedRaceIds(new Set(ids));
-      const dates = new Set<string>();
-      for (const id of ids) {
-        if (/^\d{12}$/.test(id)) {
-          // YYYYMMDDTTRR → YYYY-MM-DD
-          dates.add(`${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}`);
-        }
-      }
-      setPurchasedDates(dates);
-    }).catch(() => undefined);
+    fetchPurchasedRaceIds()
+      .then(ids => setPurchasedRaceIds(new Set(ids)))
+      .catch(() => undefined);
+    fetchPurchasedDates()
+      .then(dates => setPurchasedDates(new Set(dates)))
+      .catch(() => undefined);
   }, []);
 
   function openHorseSearch() {

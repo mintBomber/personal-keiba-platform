@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState } from 'react';
 import { Race, RacePick, HorseEntry, View, RaceMeta, RACECOURSES, PurchasedTicket, TicketType, PurchaseType } from '../../types';
 import {
   deleteRace,
@@ -192,6 +192,30 @@ function formatTicketLabel(ticket: PurchasedTicket): string {
     return formationSelections.map(pos => `[${pos.map(fmt).join(',')}]`).join(sep);
   }
   return selections.map(fmt).join(sep);
+}
+
+class TicketsErrorBoundary extends Component<{ onClose: () => void; children: React.ReactNode }, { error: string | null }> {
+  constructor(props: { onClose: () => void; children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(e: unknown) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-80 text-center space-y-3">
+            <p className="text-red-600 font-bold text-sm">馬券ポップアップでエラーが発生しました</p>
+            <p className="text-gray-500 text-xs break-all">{this.state.error}</p>
+            <button onClick={this.props.onClose} className="px-4 py-2 text-sm rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition">閉じる</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function TicketsPopup({ raceId, race, entries, onClose }: {
@@ -434,7 +458,7 @@ function TicketsPopup({ raceId, race, entries, onClose }: {
                       </button>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
-                      <span>¥{ticket.unitAmount.toLocaleString()} × {combos}組 = <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span></span>
+                      <span>¥{(ticket.unitAmount ?? 0).toLocaleString()} × {combos}組 = <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span></span>
                       <span className="flex items-center gap-1">
                         払戻：
                         {isEditingPayout ? (
@@ -1219,15 +1243,17 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
         )}
       </div>
       {showTicketsPopup && (
-        <TicketsPopup
-          raceId={race.id}
-          race={displayRace}
-          entries={entries}
-          onClose={() => {
-            setShowTicketsPopup(false);
-            fetchPurchasedTickets(race.id).then(list => setHasTickets(list.length > 0)).catch(() => undefined);
-          }}
-        />
+        <TicketsErrorBoundary onClose={() => { setShowTicketsPopup(false); }}>
+          <TicketsPopup
+            raceId={race.id}
+            race={displayRace}
+            entries={entries}
+            onClose={() => {
+              setShowTicketsPopup(false);
+              fetchPurchasedTickets(race.id).then(list => setHasTickets(list.length > 0)).catch(() => undefined);
+            }}
+          />
+        </TicketsErrorBoundary>
       )}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">

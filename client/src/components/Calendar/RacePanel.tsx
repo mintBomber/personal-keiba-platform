@@ -107,6 +107,9 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, purchasedR
   const [picksMap, setPicksMap] = useState<Map<string, RacePick>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [filterByTickets, setFilterByTickets] = useState(false);
+  const [filterByGrade, setFilterByGrade] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -154,9 +157,14 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, purchasedR
       .finally(() => setLoading(false));
 
     return () => { ac.abort(); };
-  }, [selectedDate]);
+  }, [selectedDate, refreshTick]);
 
-  const grouped = groupByRaceNum(races);
+  const GRADED = new Set(['G1', 'G2', 'G3', 'J・G1', 'J・G2', 'J・G3']);
+  const displayRaces = races.filter(r =>
+    (!filterByTickets || purchasedRaceIds.has(r.id)) &&
+    (!filterByGrade || GRADED.has(r.grade ?? ''))
+  );
+  const grouped = groupByRaceNum(displayRaces);
 
   const [y, m, d] = selectedDate?.split('-') ?? [];
   const dateLabel = selectedDate
@@ -192,15 +200,48 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, purchasedR
           ? <h2 className="font-bold text-gray-800 text-sm">{dateLabel}のレース</h2>
           : <h2 className="text-gray-400 text-sm">日付を選択してください</h2>}
         {selectedDate && (
-          <button
-            onClick={handleAddManualRace}
-            className="w-7 h-7 rounded bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 text-lg font-bold leading-none transition"
-            title="レースを手動追加"
-          >
-            +
-          </button>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => setRefreshTick(t => t + 1)}
+              disabled={loading}
+              className="w-7 h-7 rounded bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-600 text-sm font-bold leading-none transition disabled:opacity-40"
+              title="レース情報を更新"
+            >
+              ↻
+            </button>
+            <button
+              onClick={handleAddManualRace}
+              className="w-7 h-7 rounded bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 text-lg font-bold leading-none transition"
+              title="レースを手動追加"
+            >
+              +
+            </button>
+          </div>
         )}
       </div>
+
+      {selectedDate && (
+        <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-200 flex-shrink-0 flex items-center gap-4">
+          <label className="flex items-center gap-1 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={filterByTickets}
+              onChange={e => setFilterByTickets(e.target.checked)}
+              className="w-3.5 h-3.5 accent-green-600"
+            />
+            <span className="text-xs text-gray-600">💴 購入済みのみ</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={filterByGrade}
+              onChange={e => setFilterByGrade(e.target.checked)}
+              className="w-3.5 h-3.5 accent-red-600"
+            />
+            <span className="text-xs text-gray-600">重賞のみ</span>
+          </label>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto py-2">
         {!selectedDate && (
@@ -221,6 +262,10 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, purchasedR
             {error}
             <p className="mt-1 text-gray-500">設定画面で「競馬情報の更新」を実行してください</p>
           </div>
+        )}
+
+        {!loading && !error && selectedDate && (filterByTickets || filterByGrade) && displayRaces.length === 0 && races.length > 0 && (
+          <p className="text-gray-400 text-xs text-center mt-8">条件に合うレースはありません</p>
         )}
 
         {!loading && !error && selectedDate && races.length === 0 && (

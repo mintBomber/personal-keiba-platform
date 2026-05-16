@@ -116,6 +116,11 @@ export async function fetchPurchasedRaceIds(): Promise<string[]> {
   return data;
 }
 
+export async function fetchPurchasedDates(): Promise<string[]> {
+  const { data } = await api.get<string[]>('/tickets/purchased-dates');
+  return data;
+}
+
 export async function fetchPurchasedTickets(raceId: string): Promise<PurchasedTicket[]> {
   const { data } = await api.get<PurchasedTicket[]>(`/tickets/${encodeURIComponent(raceId)}`);
   return data;

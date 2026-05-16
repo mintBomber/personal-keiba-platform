@@ -12,6 +12,84 @@ const SUPPORTS_BOX: TicketType[] = ['馬連', '馬単', 'ワイド', '3連複', 
 const SUPPORTS_FORMATION: TicketType[] = ['馬単', '3連複', '3連単'];
 
 const TICKETS_DIR = path.join(__dirname, '../../data/purchased-tickets');
+const RACES_DIR = path.join(__dirname, '../../data/races');
+
+// Scan race data files to find context for a given raceId
+function findRaceContext(raceId: string): { raceDate: string; raceName: string; racecourse: string; surface: 'turf' | 'dirt'; distance: number; horseCount: number } | null {
+  if (!fs.existsSync(RACES_DIR)) return null;
+  for (const file of fs.readdirSync(RACES_DIR)) {
+    if (!file.endsWith('.json')) continue;
+    const date = file.slice(0, -5);
+    try {
+      const races = JSON.parse(fs.readFileSync(path.join(RACES_DIR, file), 'utf-8'));
+      if (!Array.isArray(races)) continue;
+      for (const race of races) {
+        if (race?.id === raceId) {
+          return {
+            raceDate: date,
+            raceName: race.name || '',
+            racecourse: race.racecourse || '',
+            surface: race.surface === 'dirt' ? 'dirt' : 'turf',
+            distance: race.distance || 0,
+            horseCount: race.horseCount || 0,
+          };
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+// Create BettingRecords for any tickets that don't have one yet
+function repairMissingBettingRecords(): void {
+  if (!fs.existsSync(TICKETS_DIR)) return;
+  const records = loadBettingRecords();
+  const recordedIds = new Set(records.map(r => r.id));
+  const newRecords: BettingRecord[] = [];
+
+  for (const file of fs.readdirSync(TICKETS_DIR)) {
+    if (!file.endsWith('.json')) continue;
+    try {
+      const raceId = Buffer.from(file.slice(0, -5), 'base64url').toString('utf-8');
+      const tickets = loadPurchasedTickets(raceId);
+      const missing = tickets.filter(t => !recordedIds.has(t.id));
+      if (missing.length === 0) continue;
+
+      const ctx = findRaceContext(raceId);
+      if (!ctx) continue;
+
+      for (const ticket of missing) {
+        const sel = ticket.selections ?? [];
+        const form = ticket.formationSelections;
+        const combos = calcCombinations(ticket.purchaseType, ticket.ticketType, sel, form);
+        newRecords.push({
+          id: ticket.id,
+          raceId,
+          raceName: ctx.raceName,
+          raceDate: ctx.raceDate,
+          racecourse: ctx.racecourse,
+          surface: ctx.surface,
+          distance: ctx.distance,
+          horseCount: ctx.horseCount,
+          ticketType: ticket.ticketType,
+          purchaseType: ticket.purchaseType,
+          selections: sel,
+          formationSelections: form,
+          unitAmount: ticket.unitAmount,
+          combinations: combos,
+          totalAmount: ticket.unitAmount * combos,
+          payoutAmount: ticket.payoutAmount,
+          createdAt: ticket.createdAt,
+        });
+        recordedIds.add(ticket.id);
+      }
+    } catch { /* ignore */ }
+  }
+
+  if (newRecords.length > 0) {
+    saveBettingRecords([...records, ...newRecords]);
+  }
+}
 
 function normalSelCount(type: TicketType): number {
   if (type === '単勝' || type === '複勝') return 1;
@@ -70,8 +148,51 @@ router.get('/purchased-race-ids', (_req: Request, res: Response) => {
   res.json(raceIds);
 });
 
+// GET /api/tickets/purchased-dates — returns unique YYYY-MM-DD dates
+// Primary: BettingRecords. Fallback: scan race data files for raceIds without records.
+router.get('/purchased-dates', (_req: Request, res: Response) => {
+  const records = loadBettingRecords();
+  const dateByRaceId = new Map<string, string>();
+  for (const r of records) dateByRaceId.set(r.raceId, r.raceDate);
+
+  if (fs.existsSync(TICKETS_DIR)) {
+    const missingIds: string[] = [];
+    for (const file of fs.readdirSync(TICKETS_DIR)) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        const raceId = Buffer.from(file.slice(0, -5), 'base64url').toString('utf-8');
+        if (!dateByRaceId.has(raceId)) {
+          const tickets = JSON.parse(fs.readFileSync(path.join(TICKETS_DIR, file), 'utf-8'));
+          if (Array.isArray(tickets) && tickets.length > 0) missingIds.push(raceId);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (missingIds.length > 0) {
+      const racesDir = path.join(__dirname, '../../data/races');
+      if (fs.existsSync(racesDir)) {
+        for (const file of fs.readdirSync(racesDir)) {
+          if (!file.endsWith('.json')) continue;
+          const date = file.slice(0, -5);
+          try {
+            const races = JSON.parse(fs.readFileSync(path.join(racesDir, file), 'utf-8'));
+            if (Array.isArray(races)) {
+              for (const race of races) {
+                if (race?.id && missingIds.includes(race.id)) dateByRaceId.set(race.id, date);
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }
+  }
+
+  res.json([...new Set(dateByRaceId.values())]);
+});
+
 // GET /api/tickets/betting-records — must come before /:raceId
 router.get('/betting-records', (_req: Request, res: Response) => {
+  repairMissingBettingRecords();
   res.json(loadBettingRecords());
 });
 
