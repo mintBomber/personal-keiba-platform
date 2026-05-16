@@ -74,10 +74,7 @@ export async function scrapeShutuba(raceId: string): Promise<HorseEntry[]> {
 
   entries.sort((a, b) => a.horseNumber - b.horseNumber);
 
-  // For past races attach finishing positions from the result page
-  const raceDate = raceId.slice(0, 8); // YYYYMMDD
-  const todayNum = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  if (raceDate < todayNum && entries.length > 0) {
+  if (entries.length > 0) {
     const placements = await fetchPlacements(raceId);
     if (placements.size > 0) {
       entries.forEach(e => {
@@ -90,8 +87,9 @@ export async function scrapeShutuba(raceId: string): Promise<HorseEntry[]> {
   return entries;
 }
 
-// Fetch finishing positions from race result page
-// result.html uses EUC-JP, rows are tr.HorseList with first numeric td = 着順
+// Fetch finishing positions from race result page.
+// result.html uses EUC-JP. Current rows use td.Result_Num .Rank for 着順
+// and td.Num.Txt_C for 馬番.
 async function fetchPlacements(raceId: string): Promise<Map<number, string>> {
   const url = `https://race.netkeiba.com/race/result.html?race_id=${raceId}`;
   const placements = new Map<number, string>();
@@ -102,12 +100,18 @@ async function fetchPlacements(raceId: string): Promise<Map<number, string>> {
 
     $('tr.HorseList').each((_, el) => {
       const row = $(el);
-      // 着順 is typically in td.Jyuni or the first non-empty td
-      let placement = row.find('td.Jyuni, td.Place, td.Rank').first().text().trim();
+      let placement = row.find('td.Result_Num .Rank').first().text().trim();
+      if (!placement) {
+        placement = row.find('td.Result_Num').first().text().trim();
+      }
       if (!placement) {
         placement = row.children('td').first().text().trim();
       }
-      const horseNumber = parseInt(row.find('td[class*="Umaban"]').first().text().trim(), 10);
+
+      const horseNumber =
+        parseInt(row.find('td.Num.Txt_C').first().text().trim(), 10) ||
+        parseInt(row.find('td[class*="Umaban"]').first().text().trim(), 10);
+
       if (horseNumber > 0 && placement) {
         placements.set(horseNumber, placement);
       }

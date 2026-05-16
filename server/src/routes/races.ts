@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { loadSettings } from './settings';
 import { loadSchedule, loadRaces, saveSchedule, saveRaces } from '../store';
 import { fetchRaw, getDayRaces, getMonthlySchedule } from '../scrapers/netkeiba';
+import { getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
 
 const router = Router();
 
@@ -32,7 +33,11 @@ router.get('/schedule/:year/:month', async (req: Request, res: Response) => {
 
   try {
     const { favoriteTrackIds } = loadSettings();
-    const schedule = await getMonthlySchedule(year, month, favoriteTrackIds);
+    const [netkeibaSchedule, jraSchedule] = await Promise.all([
+      getMonthlySchedule(year, month, favoriteTrackIds),
+      getJraMonthlySchedule(year, month, favoriteTrackIds),
+    ]);
+    const schedule = mergeScheduleDays(netkeibaSchedule, jraSchedule);
     saveSchedule(year, month, schedule);
     res.json(schedule);
   } catch (err) {

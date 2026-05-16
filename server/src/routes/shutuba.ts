@@ -17,6 +17,10 @@ function attachWeightDiff(entries: HorseEntry[]): HorseEntry[] {
   });
 }
 
+function hasCompletePlacements(entries: HorseEntry[]): boolean {
+  return entries.length > 0 && entries.every(entry => entry.placement != null && entry.placement !== '');
+}
+
 // GET /api/shutuba/:raceId
 router.get('/:raceId', async (req: Request, res: Response) => {
   const { raceId } = req.params;
@@ -27,13 +31,10 @@ router.get('/:raceId', async (req: Request, res: Response) => {
   }
 
   const stored = loadShutuba(raceId);
-  const raceDate = raceId.slice(0, 8); // YYYYMMDD
-  const todayNum = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const isPast = raceDate < todayNum;
 
-  // For past races: return cached data only if placements are already stored.
-  // If not, fall through to re-scrape (which will also fetch result.html).
-  if (stored && (!isPast || stored.some(e => e.placement != null))) {
+  // Cached past races from older scraper versions may be missing placements.
+  // Re-scrape those once; result.html is empty before official results exist.
+  if (stored && hasCompletePlacements(stored)) {
     res.json(attachWeightDiff(stored));
     return;
   }
@@ -46,6 +47,10 @@ router.get('/:raceId', async (req: Request, res: Response) => {
     res.json(attachWeightDiff(entries));
   } catch (err) {
     console.error('Shutuba fetch error:', err);
+    if (stored) {
+      res.json(attachWeightDiff(stored));
+      return;
+    }
     res.status(500).json({ error: 'Failed to fetch entry list' });
   }
 });

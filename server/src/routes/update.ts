@@ -3,6 +3,7 @@ import path from 'path';
 import { Router, Request, Response } from 'express';
 import { loadSettings } from './settings';
 import { getMonthlySchedule, getDayRaces } from '../scrapers/netkeiba';
+import { getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
 import { saveSchedule, saveRaces, loadRaces } from '../store';
 import { Race, RaceScheduleDay, UpdateResult } from '../types';
 import { cache } from '../cache';
@@ -104,29 +105,6 @@ function buildScheduleFromStoredRaces(
   return schedule;
 }
 
-function mergeSchedules(base: RaceScheduleDay[], fromStoredRaces: RaceScheduleDay[]): RaceScheduleDay[] {
-  const byDate = new Map<string, RaceScheduleDay>();
-
-  for (const day of base) {
-    byDate.set(day.date, {
-      date: day.date,
-      tracks: day.tracks.map(track => ({ ...track })),
-    });
-  }
-
-  for (const day of fromStoredRaces) {
-    const merged = byDate.get(day.date) ?? { date: day.date, tracks: [] };
-    for (const track of day.tracks) {
-      if (!merged.tracks.some(existing => existing.id === track.id)) {
-        merged.tracks.push({ ...track });
-      }
-    }
-    byDate.set(day.date, merged);
-  }
-
-  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-}
-
 function hasStoredRaceDetails(date: string): boolean {
   const races = loadRaces(date);
   return races !== null && races.length > 0;
@@ -163,7 +141,11 @@ router.post('/', async (_req: Request, res: Response) => {
   console.log(`Fetching schedules for ${months.length} months...`);
   for (const { year, month } of months) {
     try {
-      const schedule = await getMonthlySchedule(year, month, favoriteTrackIds);
+      const [netkeibaSchedule, jraSchedule] = await Promise.all([
+        getMonthlySchedule(year, month, favoriteTrackIds),
+        getJraMonthlySchedule(year, month, favoriteTrackIds),
+      ]);
+      const schedule = mergeScheduleDays(netkeibaSchedule, jraSchedule);
       schedulesByMonth.set(monthKey(year, month), schedule);
       saveSchedule(year, month, schedule);
       scheduleDays += schedule.length;
@@ -224,7 +206,7 @@ router.post('/', async (_req: Request, res: Response) => {
   for (const { year, month } of months) {
     const base = schedulesByMonth.get(monthKey(year, month)) ?? [];
     const fromStored = buildScheduleFromStoredRaces(year, month, favoriteTrackIds);
-    const merged = mergeSchedules(base, fromStored);
+    const merged = mergeScheduleDays(base, fromStored);
     saveSchedule(year, month, merged);
     finalScheduleDays += merged.length;
     mergedMonths++;
