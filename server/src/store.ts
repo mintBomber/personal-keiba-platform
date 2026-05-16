@@ -12,6 +12,7 @@ import {
   HorseMemo,
   DeletedRaceEvent,
   PurchasedTicket,
+  BettingRecord,
 } from './types';
 
 const DATA_DIR = path.join(__dirname, '../data');
@@ -226,4 +227,16 @@ export function loadPurchasedTickets(raceId: string): PurchasedTicket[] {
 export function savePurchasedTickets(raceId: string, tickets: PurchasedTicket[]): void {
   const file = path.join(DATA_DIR, 'purchased-tickets', `${keyToFileName(raceId)}.json`);
   writeJson(file, tickets);
+}
+
+// ── Betting records (flat log for analysis) ───────────────
+
+export function loadBettingRecords(): BettingRecord[] {
+  const file = path.join(DATA_DIR, 'betting-records.json');
+  return readJson<BettingRecord[]>(file) ?? [];
+}
+
+export function saveBettingRecords(records: BettingRecord[]): void {
+  const file = path.join(DATA_DIR, 'betting-records.json');
+  writeJson(file, records);
 }

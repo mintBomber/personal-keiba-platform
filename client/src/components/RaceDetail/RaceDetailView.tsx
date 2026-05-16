@@ -194,8 +194,9 @@ function formatTicketLabel(ticket: PurchasedTicket): string {
   return selections.map(fmt).join(sep);
 }
 
-function TicketsPopup({ raceId, entries, onClose }: {
+function TicketsPopup({ raceId, race, entries, onClose }: {
   raceId: string;
+  race: Race;
   entries: HorseEntry[];
   onClose: () => void;
 }) {
@@ -285,11 +286,12 @@ function TicketsPopup({ raceId, entries, onClose }: {
     if (!canSave) return;
     setSaving(true);
     try {
+      const raceCtx = { raceName: race.name, raceDate: race.date, racecourse: race.racecourse, surface: race.surface, distance: race.distance, horseCount: race.horseCount };
       const payload = newPurchaseType === 'フォーメーション'
-        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: [], formationSelections: formationSels.map(s => Array.from(s).sort((a, b) => a - b)), unitAmount: Number(newAmount) }
+        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: [], formationSelections: formationSels.map(s => Array.from(s).sort((a, b) => a - b)), unitAmount: Number(newAmount), ...raceCtx }
         : newPurchaseType === 'ボックス'
-        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: Array.from(boxSelections).sort((a, b) => a - b), unitAmount: Number(newAmount) }
-        : { ticketType: newType, purchaseType: '通常' as PurchaseType, selections: newSelections as number[], unitAmount: Number(newAmount) };
+        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: Array.from(boxSelections).sort((a, b) => a - b), unitAmount: Number(newAmount), ...raceCtx }
+        : { ticketType: newType, purchaseType: '通常' as PurchaseType, selections: newSelections as number[], unitAmount: Number(newAmount), ...raceCtx };
       const ticket = await addPurchasedTicket(raceId, payload);
       setTickets(prev => [ticket, ...prev]);
       resetForm(newType, newPurchaseType);
@@ -1219,6 +1221,7 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
       {showTicketsPopup && (
         <TicketsPopup
           raceId={race.id}
+          race={displayRace}
           entries={entries}
           onClose={() => {
             setShowTicketsPopup(false);

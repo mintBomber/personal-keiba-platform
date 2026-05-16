@@ -140,6 +140,26 @@ export interface UpdateResult {
 export type TicketType = '単勝' | '複勝' | '枠連' | '馬連' | '馬単' | 'ワイド' | '3連複' | '3連単';
 export type PurchaseType = '通常' | 'ボックス' | 'フォーメーション';
 
+export interface BettingRecord {
+  id: string;
+  raceId: string;
+  raceName: string;
+  raceDate: string;
+  racecourse: string;
+  surface: 'turf' | 'dirt';
+  distance: number;
+  horseCount: number;
+  ticketType: TicketType;
+  purchaseType: PurchaseType;
+  selections: number[];
+  formationSelections?: number[][];
+  unitAmount: number;
+  combinations: number;
+  totalAmount: number;
+  payoutAmount?: number;
+  createdAt: string;
+}
+
 export interface PurchasedTicket {
   id: string;
   ticketType: TicketType;
@@ -156,4 +176,5 @@ export type View =
   | { type: 'calendar' }
   | { type: 'settings' }
   | { type: 'raceDetail'; raceId: string; race: Race }
-  | { type: 'horseDetail'; horseId: string; horseName: string; backView: View };
+  | { type: 'horseDetail'; horseId: string; horseName: string; backView: View }
+  | { type: 'bettingAnalysis' };

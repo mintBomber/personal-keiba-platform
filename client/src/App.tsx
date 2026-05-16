@@ -4,6 +4,7 @@ import CalendarView from './components/Calendar/CalendarView';
 import SettingsView from './components/Settings/SettingsView';
 import RaceDetailView from './components/RaceDetail/RaceDetailView';
 import HorseDetailView from './components/HorseDetail/HorseDetailView';
+import BettingAnalysisView from './components/BettingAnalysis/BettingAnalysisView';
 
 export default function App() {
   const [view, setView] = useState<View>({ type: 'calendar' });
@@ -36,6 +37,10 @@ export default function App() {
         onNavigate={navigate}
       />
     );
+  }
+
+  if (view.type === 'bettingAnalysis') {
+    return <BettingAnalysisView onBack={() => navigate({ type: 'calendar' })} />;
   }
 
   return (

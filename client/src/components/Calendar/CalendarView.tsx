@@ -179,6 +179,12 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
             >
               馬
             </button>
+            <button
+              onClick={() => onNavigate({ type: 'bettingAnalysis' })}
+              className="text-sm px-3 py-1 rounded bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-200 transition"
+            >
+              馬券
+            </button>
           </div>
 
           <div className="flex items-center gap-2">

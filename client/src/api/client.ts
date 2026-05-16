@@ -2,7 +2,7 @@ import axios from 'axios';
 import {
   Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick,
   HorseSearchResult, RaceMeta, FavoriteHorse, HorseMemo, DeletedRaceEvent,
-  PurchasedTicket, TicketType, PurchaseType,
+  PurchasedTicket, TicketType, PurchaseType, BettingRecord,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
@@ -129,9 +129,20 @@ export async function addPurchasedTicket(
     selections: number[];
     formationSelections?: number[][];
     unitAmount: number;
+    raceName?: string;
+    raceDate?: string;
+    racecourse?: string;
+    surface?: 'turf' | 'dirt';
+    distance?: number;
+    horseCount?: number;
   },
 ): Promise<PurchasedTicket> {
   const { data } = await api.post<PurchasedTicket>(`/tickets/${encodeURIComponent(raceId)}`, payload);
+  return data;
+}
+
+export async function fetchBettingRecords(): Promise<BettingRecord[]> {
+  const { data } = await api.get<BettingRecord[]>('/tickets/betting-records');
   return data;
 }
 
