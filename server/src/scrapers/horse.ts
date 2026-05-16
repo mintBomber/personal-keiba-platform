@@ -38,10 +38,13 @@ export async function scrapeHorse(horseId: string): Promise<HorseDetail> {
     $m('h1').first().text().trim() ||
     $m('title').text().split(/[|｜]/)[0].trim();
 
-  const sexAge    = findTableValue($m, '性齢') ?? '';
-  const sex       = sexAge.replace(/\d/g, '');
-  const age       = parseInt(sexAge.replace(/\D/g, ''), 10) || 0;
   const birthDate = findTableValue($m, '生年月日') ?? '';
+  const sexAgeText =
+    findTableValue($m, '性齢') ??
+    $m('div.horse_title .txt_01').first().text().trim();
+  const parsedSexAge = parseSexAge(sexAgeText);
+  const sex = parsedSexAge.sex;
+  const age = parsedSexAge.age || deriveJapaneseRaceAge(birthDate) || 0;
   const trainer   = findTableValue($m, '調教師') ?? findTableValue($m, '担当') ?? '';
   const owner     = findTableValue($m, '馬主') ?? '';
 
@@ -161,6 +164,29 @@ function parseRaceHistory($: cheerio.CheerioAPI): HorseRaceHistory[] {
   });
 
   return races;
+}
+
+function normalizeDigits(value: string): string {
+  return value.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+}
+
+function parseSexAge(value: string | undefined): { sex: string; age: number } {
+  const normalized = normalizeDigits(value ?? '').replace(/\s+/g, '');
+  const sex = normalized.match(/[牡牝セ騸]/)?.[0] ?? '';
+  const age = parseInt(normalized.match(/(\d+)歳?/)?.[1] ?? '', 10) || 0;
+
+  return {
+    sex: sex === '騸' ? 'セ' : sex,
+    age,
+  };
+}
+
+function deriveJapaneseRaceAge(birthDate: string): number {
+  const birthYear = parseInt(normalizeDigits(birthDate).match(/(\d{4})/)?.[1] ?? '', 10);
+  if (!birthYear) return 0;
+
+  const age = new Date().getFullYear() - birthYear;
+  return age > 0 ? age : 0;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
