@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Race, RacePick, HorseEntry, View, RaceMeta, RACECOURSES } from '../../types';
+import { Race, RacePick, HorseEntry, View, RaceMeta, RACECOURSES, PurchasedTicket, TicketType, PurchaseType } from '../../types';
 import {
   deleteRace,
   fetchPicks,
@@ -8,6 +8,10 @@ import {
   fetchUserPicks,
   saveManualRace,
   saveUserPicks,
+  fetchPurchasedTickets,
+  addPurchasedTicket,
+  deletePurchasedTicket,
+  updateTicketPayout,
 } from '../../api/client';
 
 const GATE_COLORS: Record<number, string> = {
@@ -119,6 +123,370 @@ function mergeRaceMeta(race: Race, meta: RaceMeta): Race {
   };
 }
 
+const TICKET_TYPES: TicketType[] = ['単勝', '複勝', '枠連', '馬連', '馬単', 'ワイド', '3連複', '3連単'];
+const SUPPORTS_BOX: TicketType[] = ['馬連', '馬単', 'ワイド', '3連複', '3連単'];
+const SUPPORTS_FORMATION: TicketType[] = ['馬単', '3連複', '3連単'];
+const NORMAL_SEL_COUNT: Record<TicketType, number> = {
+  '単勝': 1, '複勝': 1, '枠連': 2, '馬連': 2, '馬単': 2, 'ワイド': 2, '3連複': 3, '3連単': 3,
+};
+const FORMATION_POS_COUNT: Record<TicketType, number> = {
+  '単勝': 1, '複勝': 1, '枠連': 2, '馬連': 2, '馬単': 2, 'ワイド': 2, '3連複': 3, '3連単': 3,
+};
+const POSITION_LABELS: Record<TicketType, string[]> = {
+  '馬単': ['1着', '2着'],
+  '3連複': ['軸1', '軸2', '軸3'],
+  '3連単': ['1着', '2着', '3着'],
+  '単勝': [''], '複勝': [''], '枠連': [''], '馬連': [''], 'ワイド': [''],
+};
+
+function calcCombinations(ticket: PurchasedTicket): number {
+  const { ticketType, purchaseType, selections, formationSelections } = ticket;
+  if (purchaseType === '通常') return 1;
+  const n = selections.length;
+  if (purchaseType === 'ボックス') {
+    if (ticketType === '馬連' || ticketType === 'ワイド') return n * (n - 1) / 2;
+    if (ticketType === '馬単') return n * (n - 1);
+    if (ticketType === '3連複') return n * (n - 1) * (n - 2) / 6;
+    if (ticketType === '3連単') return n * (n - 1) * (n - 2);
+    return 1;
+  }
+  if (purchaseType === 'フォーメーション' && formationSelections) {
+    if (formationSelections.length === 2) {
+      let count = 0;
+      for (const h1 of formationSelections[0]) for (const h2 of formationSelections[1]) if (h1 !== h2) count++;
+      return count;
+    }
+    if (formationSelections.length === 3) {
+      if (ticketType === '3連複') {
+        const seen = new Set<string>();
+        for (const h1 of formationSelections[0]) for (const h2 of formationSelections[1]) for (const h3 of formationSelections[2]) {
+          if (h1 !== h2 && h1 !== h3 && h2 !== h3) seen.add([h1, h2, h3].sort((a, b) => a - b).join('-'));
+        }
+        return seen.size;
+      }
+      let count = 0;
+      for (const h1 of formationSelections[0]) for (const h2 of formationSelections[1]) for (const h3 of formationSelections[2]) {
+        if (h1 !== h2 && h1 !== h3 && h2 !== h3) count++;
+      }
+      return count;
+    }
+  }
+  return 1;
+}
+
+function ticketTotalAmount(ticket: PurchasedTicket): number {
+  return ticket.unitAmount * calcCombinations(ticket);
+}
+
+function formatTicketLabel(ticket: PurchasedTicket): string {
+  const { ticketType, purchaseType, selections, formationSelections } = ticket;
+  const arrow = ticketType === '馬単' || ticketType === '3連単';
+  const sep = arrow ? '→' : '-';
+  const fmt = (n: number) => ticketType === '枠連' ? `${n}枠` : `${n}`;
+  if (purchaseType === '通常') {
+    if (ticketType === '単勝' || ticketType === '複勝') return `${selections[0]}番`;
+    return selections.map(fmt).join(sep);
+  }
+  if (purchaseType === 'ボックス') return `[${selections.map(fmt).join(',')}] BOX`;
+  if (purchaseType === 'フォーメーション' && formationSelections) {
+    return formationSelections.map(pos => `[${pos.map(fmt).join(',')}]`).join(sep);
+  }
+  return selections.map(fmt).join(sep);
+}
+
+function TicketsPopup({ raceId, entries, onClose }: {
+  raceId: string;
+  entries: HorseEntry[];
+  onClose: () => void;
+}) {
+  const [tickets, setTickets] = useState<PurchasedTicket[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [newType, setNewType] = useState<TicketType>('単勝');
+  const [newPurchaseType, setNewPurchaseType] = useState<PurchaseType>('通常');
+  // 通常用
+  const [newSelections, setNewSelections] = useState<(number | '')[]>(['']);
+  // ボックス用
+  const [boxSelections, setBoxSelections] = useState<Set<number>>(new Set());
+  // フォーメーション用（ポジション別）
+  const [formationSels, setFormationSels] = useState<Set<number>[]>([new Set(), new Set()]);
+  const [newAmount, setNewAmount] = useState<number | ''>(100);
+  // 払戻金編集
+  const [editingPayoutId, setEditingPayoutId] = useState<string | null>(null);
+  const [editingPayoutVal, setEditingPayoutVal] = useState<number | ''>('');
+
+  const horseNums = entries.map(e => e.horseNumber).filter(n => n > 0).sort((a, b) => a - b);
+  const allNums = horseNums.length > 0 ? horseNums : Array.from({ length: 18 }, (_, i) => i + 1);
+  const gateNums = [1, 2, 3, 4, 5, 6, 7, 8];
+  const isGate = newType === '枠連';
+  const nums = isGate ? gateNums : allNums;
+
+  const supportsBox = SUPPORTS_BOX.includes(newType);
+  const supportsFormation = SUPPORTS_FORMATION.includes(newType);
+  const posCount = FORMATION_POS_COUNT[newType];
+  const posLabels = POSITION_LABELS[newType] ?? [];
+
+  useEffect(() => {
+    fetchPurchasedTickets(raceId)
+      .then(setTickets)
+      .catch(() => setTickets([]))
+      .finally(() => setLoading(false));
+  }, [raceId]);
+
+  function resetForm(type: TicketType, pt: PurchaseType) {
+    const pos = FORMATION_POS_COUNT[type];
+    setNewSelections(Array(NORMAL_SEL_COUNT[type]).fill(''));
+    setBoxSelections(new Set());
+    setFormationSels(Array.from({ length: pos }, () => new Set<number>()));
+    setNewPurchaseType(pt);
+    setNewType(type);
+  }
+
+  function handleTypeChange(type: TicketType) {
+    const pt = newPurchaseType === 'ボックス' && !SUPPORTS_BOX.includes(type) ? '通常'
+      : newPurchaseType === 'フォーメーション' && !SUPPORTS_FORMATION.includes(type) ? '通常'
+      : newPurchaseType;
+    resetForm(type, pt);
+  }
+
+  function toggleBox(n: number) {
+    setBoxSelections(prev => { const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s; });
+  }
+
+  function toggleFormation(posIdx: number, n: number) {
+    setFormationSels(prev => prev.map((s, i) => {
+      if (i !== posIdx) return s;
+      const ns = new Set(s); ns.has(n) ? ns.delete(n) : ns.add(n); return ns;
+    }));
+  }
+
+  // 組み合わせ数プレビュー
+  const previewTicket: PurchasedTicket | null = (() => {
+    if (newPurchaseType === 'ボックス') {
+      const sel = Array.from(boxSelections).sort((a, b) => a - b);
+      if (sel.length < 2) return null;
+      return { id: '', ticketType: newType, purchaseType: 'ボックス', selections: sel, unitAmount: Number(newAmount) || 0, createdAt: '' };
+    }
+    if (newPurchaseType === 'フォーメーション') {
+      if (formationSels.some(s => s.size === 0)) return null;
+      return { id: '', ticketType: newType, purchaseType: 'フォーメーション', selections: [], formationSelections: formationSels.map(s => Array.from(s).sort((a, b) => a - b)), unitAmount: Number(newAmount) || 0, createdAt: '' };
+    }
+    return null;
+  })();
+  const previewCombinations = previewTicket ? calcCombinations(previewTicket) : null;
+
+  const canSave = !saving && Number(newAmount) > 0 && (
+    newPurchaseType === '通常' ? newSelections.every(s => s !== '') :
+    newPurchaseType === 'ボックス' ? boxSelections.size >= 2 :
+    formationSels.every(s => s.size > 0)
+  );
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      const payload = newPurchaseType === 'フォーメーション'
+        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: [], formationSelections: formationSels.map(s => Array.from(s).sort((a, b) => a - b)), unitAmount: Number(newAmount) }
+        : newPurchaseType === 'ボックス'
+        ? { ticketType: newType, purchaseType: newPurchaseType as PurchaseType, selections: Array.from(boxSelections).sort((a, b) => a - b), unitAmount: Number(newAmount) }
+        : { ticketType: newType, purchaseType: '通常' as PurchaseType, selections: newSelections as number[], unitAmount: Number(newAmount) };
+      const ticket = await addPurchasedTicket(raceId, payload);
+      setTickets(prev => [ticket, ...prev]);
+      resetForm(newType, newPurchaseType);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(ticketId: string) {
+    await deletePurchasedTicket(raceId, ticketId);
+    setTickets(prev => prev.filter(t => t.id !== ticketId));
+  }
+
+  async function handleSavePayout(ticketId: string) {
+    const val = editingPayoutVal === '' ? undefined : Number(editingPayoutVal);
+    const updated = await updateTicketPayout(raceId, ticketId, val);
+    setTickets(prev => prev.map(t => t.id === ticketId ? updated : t));
+    setEditingPayoutId(null);
+  }
+
+  const totalBet = tickets.reduce((sum, t) => sum + ticketTotalAmount(t), 0);
+  const totalPayout = tickets.reduce((sum, t) => sum + (t.payoutAmount ?? 0), 0);
+
+  const arrow = newType === '馬単' || newType === '3連単';
+  const sep = arrow ? '→' : '-';
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-xl shadow-xl w-[440px] max-h-[88vh] flex flex-col">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+          <h3 className="font-bold text-gray-800">購入馬券</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 p-4 space-y-4">
+          {/* ── 新規入力フォーム ── */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            {/* 馬券種類 + 購入方式 */}
+            <div className="flex gap-2 flex-wrap">
+              <select value={newType} onChange={e => handleTypeChange(e.target.value as TicketType)}
+                className="border border-gray-300 rounded px-2 py-1 text-sm bg-white">
+                {TICKET_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <div className="flex gap-1">
+                {(['通常', ...(supportsBox ? ['ボックス'] : []), ...(supportsFormation ? ['フォーメーション'] : [])] as PurchaseType[]).map(pt => (
+                  <button key={pt} onClick={() => resetForm(newType, pt)}
+                    className={`text-xs px-2 py-1 rounded border transition ${newPurchaseType === pt ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                    {pt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 通常 選択 */}
+            {newPurchaseType === '通常' && (
+              <div className="flex items-center gap-1 flex-wrap">
+                {newSelections.map((sel, i) => (
+                  <span key={i} className="flex items-center gap-1">
+                    {i > 0 && <span className="text-gray-500 text-sm font-bold">{sep}</span>}
+                    <select value={sel} onChange={e => setNewSelections(prev => prev.map((s, idx) => idx === i ? (e.target.value === '' ? '' : Number(e.target.value)) : s))}
+                      className="border border-gray-300 rounded px-1 py-1 text-sm bg-white w-16 text-center">
+                      <option value="">-</option>
+                      {nums.map(n => <option key={n} value={n}>{isGate ? `${n}枠` : `${n}番`}</option>)}
+                    </select>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* ボックス 選択（チェックボックス） */}
+            {newPurchaseType === 'ボックス' && (
+              <div className="flex flex-wrap gap-1">
+                {nums.map(n => (
+                  <label key={n} className={`flex items-center gap-0.5 px-2 py-1 rounded border text-xs cursor-pointer transition ${boxSelections.has(n) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                    <input type="checkbox" className="hidden" checked={boxSelections.has(n)} onChange={() => toggleBox(n)} />
+                    {isGate ? `${n}枠` : `${n}番`}
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {/* フォーメーション 選択 */}
+            {newPurchaseType === 'フォーメーション' && (
+              <div className="space-y-1.5">
+                {Array.from({ length: posCount }, (_, posIdx) => (
+                  <div key={posIdx}>
+                    <div className="text-xs text-gray-500 mb-1">{posLabels[posIdx] ?? `${posIdx + 1}着`}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {nums.map(n => (
+                        <label key={n} className={`flex items-center gap-0.5 px-2 py-1 rounded border text-xs cursor-pointer transition ${formationSels[posIdx]?.has(n) ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'}`}>
+                          <input type="checkbox" className="hidden" checked={formationSels[posIdx]?.has(n) ?? false} onChange={() => toggleFormation(posIdx, n)} />
+                          {isGate ? `${n}枠` : `${n}番`}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 金額 + 組数プレビュー + 保存 */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500">1組</span>
+              <input type="number" min={100} step={100} value={newAmount}
+                onChange={e => setNewAmount(e.target.value === '' ? '' : Number(e.target.value))}
+                className="border border-gray-300 rounded px-2 py-1 text-sm w-24" placeholder="金額" />
+              <span className="text-sm text-gray-600">円</span>
+              {previewCombinations !== null && (
+                <span className="text-xs text-blue-600 font-semibold">{previewCombinations}組 = ¥{(Number(newAmount || 0) * previewCombinations).toLocaleString()}</span>
+              )}
+              <button onClick={handleSave} disabled={!canSave}
+                className="ml-auto px-3 py-1 text-sm rounded bg-blue-500 hover:bg-blue-600 text-white transition disabled:opacity-50">
+                {saving ? '保存中...' : '保存する'}
+              </button>
+            </div>
+          </div>
+
+          {/* ── 登録済みリスト ── */}
+          {loading ? (
+            <p className="text-sm text-gray-400 text-center py-2">読み込み中...</p>
+          ) : tickets.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-2">購入馬券はまだ登録されていません</p>
+          ) : (
+            <div className="space-y-2">
+              {tickets.map(ticket => {
+                const combos = calcCombinations(ticket);
+                const total = ticket.unitAmount * combos;
+                const isEditingPayout = editingPayoutId === ticket.id;
+                return (
+                  <div key={ticket.id} className="bg-gray-50 rounded-lg border border-gray-100 px-3 py-2 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-white bg-blue-500 rounded px-1.5 py-0.5 whitespace-nowrap">{ticket.ticketType}</span>
+                      {ticket.purchaseType !== '通常' && (
+                        <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">{ticket.purchaseType}</span>
+                      )}
+                      <span className="text-sm font-medium text-gray-800 flex-1 min-w-0 break-all">{formatTicketLabel(ticket)}</span>
+                      <button onClick={() => handleDelete(ticket.id)}
+                        className="text-xs px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 transition whitespace-nowrap">
+                        削除する
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+                      <span>¥{ticket.unitAmount.toLocaleString()} × {combos}組 = <span className="font-semibold text-gray-800">¥{total.toLocaleString()}</span></span>
+                      <span className="flex items-center gap-1">
+                        払戻：
+                        {isEditingPayout ? (
+                          <>
+                            <input type="number" min={0} step={10} autoFocus value={editingPayoutVal}
+                              onChange={e => setEditingPayoutVal(e.target.value === '' ? '' : Number(e.target.value))}
+                              onBlur={() => handleSavePayout(ticket.id)}
+                              onKeyDown={e => { if (e.key === 'Enter') handleSavePayout(ticket.id); if (e.key === 'Escape') setEditingPayoutId(null); }}
+                              className="border border-gray-300 rounded px-1 py-0.5 w-24 text-right" />
+                            <span>円</span>
+                          </>
+                        ) : (
+                          <button onClick={() => { setEditingPayoutId(ticket.id); setEditingPayoutVal(ticket.payoutAmount ?? ''); }}
+                            className="underline decoration-dotted text-blue-600 hover:text-blue-800">
+                            {ticket.payoutAmount != null ? `¥${ticket.payoutAmount.toLocaleString()}` : '未入力'}
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── フッター：合計 ── */}
+        {!loading && tickets.length > 0 && (
+          <div className="border-t border-gray-200 px-4 py-3 flex-shrink-0 bg-gray-50 rounded-b-xl space-y-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">合計掛け金</span>
+              <span className="font-bold text-gray-800">¥{totalBet.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">合計払戻金</span>
+              <span className={`font-bold ${totalPayout > totalBet ? 'text-green-600' : totalPayout > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                {totalPayout > 0 ? `¥${totalPayout.toLocaleString()}` : '—'}
+              </span>
+            </div>
+            {totalPayout > 0 && (
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>収支</span>
+                <span className={totalPayout >= totalBet ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'}>
+                  {totalPayout >= totalBet ? '+' : ''}¥{(totalPayout - totalBet).toLocaleString()}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PickHorseName({
   name, entries, onNavigate, backView,
 }: {
@@ -213,7 +581,7 @@ function PredictionCard({
 }
 
 function UserPredictionCard({
-  picks, saving, message, entries, collapsed, onToggle, onChange, onSave,
+  picks, saving, message, entries, collapsed, onToggle, onChange, onSave, onOpenTickets,
 }: {
   picks: RacePick;
   saving: boolean;
@@ -223,6 +591,7 @@ function UserPredictionCard({
   onToggle: () => void;
   onChange: (key: keyof Pick<RacePick, 'honmei' | 'taikou' | 'tanana'>, value: string) => void;
   onSave: () => void;
+  onOpenTickets: () => void;
 }) {
   const horseOptions = entries
     .map(entry => entry.horseName.trim())
@@ -242,8 +611,14 @@ function UserPredictionCard({
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-4 overflow-hidden">
       <div className={`px-4 py-2.5 bg-gray-50 flex items-center justify-between gap-3 ${collapsed ? '' : 'border-b border-gray-200'}`}>
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <h2 className="text-sm font-bold text-gray-800">自分の予想</h2>
+          <button
+            onClick={onOpenTickets}
+            className="text-xs px-2 py-0.5 rounded bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-200 transition whitespace-nowrap"
+          >
+            購入馬券
+          </button>
           {message && <span className="text-xs text-blue-600">{message}</span>}
         </div>
         <div className="flex items-center gap-2">
@@ -312,6 +687,8 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
   const [saveMessage, setSaveMessage] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showTicketsPopup, setShowTicketsPopup] = useState(false);
+  const [hasTickets, setHasTickets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
@@ -355,6 +732,13 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
 
     fetchUserPicks(race.id)
       .then(setUserPicks)
+      .catch(() => undefined);
+  }, [race.id]);
+
+  useEffect(() => {
+    if (!race.id) return;
+    fetchPurchasedTickets(race.id)
+      .then(list => setHasTickets(list.length > 0))
       .catch(() => undefined);
   }, [race.id]);
 
@@ -476,8 +860,9 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
             <button onClick={onBack} className="text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition">
               ← 戻る
             </button>
-            <h1 className="font-bold text-gray-900">
+            <h1 className="font-bold text-gray-900 flex items-center gap-1.5">
               {displayRace.racecourse} 第{displayRace.raceNumber}レース
+              {hasTickets && <span title="購入馬券あり">💴</span>}
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -617,6 +1002,7 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
               onToggle={() => setUserPredictionCollapsed(value => !value)}
               onChange={updateUserPick}
               onSave={handleSaveUserPicks}
+              onOpenTickets={() => setShowTicketsPopup(true)}
             />
           </>
         )}
@@ -830,6 +1216,16 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
           </div>
         )}
       </div>
+      {showTicketsPopup && (
+        <TicketsPopup
+          raceId={race.id}
+          entries={entries}
+          onClose={() => {
+            setShowTicketsPopup(false);
+            fetchPurchasedTickets(race.id).then(list => setHasTickets(list.length > 0)).catch(() => undefined);
+          }}
+        />
+      )}
       {showDeleteConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
           <div className="w-80 rounded-lg shadow-xl overflow-hidden bg-white">

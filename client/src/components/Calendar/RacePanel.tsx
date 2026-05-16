@@ -25,6 +25,7 @@ function GradeBadge({ grade }: { grade: string }) {
 interface Props {
   selectedDate: string | null;
   isScheduledRaceDay: boolean;
+  purchasedRaceIds: Set<string>;
   onNavigate: (view: View) => void;
 }
 
@@ -40,10 +41,11 @@ function groupByRaceNum(races: Race[]): Map<number, Race[]> {
 interface RaceRowProps {
   race: Race;
   picks: RacePick | null;
+  hasPurchasedTicket: boolean;
   onNavigate: (view: View) => void;
 }
 
-function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
+function RaceRow({ race, picks, hasPurchasedTicket, onNavigate }: RaceRowProps) {
   const surface = SURFACE[race.surface] ?? race.surface;
   const displayPicks = picks ?? race.picks;
   const hasRealPicks = displayPicks.honmei !== '---';
@@ -64,6 +66,7 @@ function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
         {race.horseCount > 0 && (
           <span className="text-xs text-gray-400">{race.horseCount}頭</span>
         )}
+        {hasPurchasedTicket && <span className="text-xs leading-none" title="購入馬券あり">💴</span>}
       </div>
       {/* Picks — only shown when odds data is available */}
       {hasRealPicks && (
@@ -99,7 +102,7 @@ function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
   );
 }
 
-export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate }: Props) {
+export default function RacePanel({ selectedDate, isScheduledRaceDay, purchasedRaceIds, onNavigate }: Props) {
   const [races, setRaces] = useState<Race[]>([]);
   const [picksMap, setPicksMap] = useState<Map<string, RacePick>>(new Map());
   const [loading, setLoading] = useState(false);
@@ -250,6 +253,7 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
                   key={race.id || `${race.racecourseId}-${race.name}`}
                   race={race}
                   picks={picksMap.get(race.id) ?? null}
+                  hasPurchasedTicket={purchasedRaceIds.has(race.id)}
                   onNavigate={onNavigate}
                 />
               ))}

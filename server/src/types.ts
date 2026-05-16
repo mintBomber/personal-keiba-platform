@@ -145,3 +145,17 @@ export interface UpdateResult {
   raceDays: number;
   totalRaces: number;
 }
+
+export type TicketType = '単勝' | '複勝' | '枠連' | '馬連' | '馬単' | 'ワイド' | '3連複' | '3連単';
+export type PurchaseType = '通常' | 'ボックス' | 'フォーメーション';
+
+export interface PurchasedTicket {
+  id: string;
+  ticketType: TicketType;
+  purchaseType: PurchaseType;
+  selections: number[];             // 通常・ボックス用
+  formationSelections?: number[][]; // フォーメーション用（ポジション別）
+  unitAmount: number;               // 1組あたりの金額
+  payoutAmount?: number;            // 払戻金（手動入力）
+  createdAt: string;
+}

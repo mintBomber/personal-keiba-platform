@@ -11,6 +11,7 @@ import {
   RacePick,
   HorseMemo,
   DeletedRaceEvent,
+  PurchasedTicket,
 } from './types';
 
 const DATA_DIR = path.join(__dirname, '../data');
@@ -213,4 +214,16 @@ export function loadFavoriteHorses(): FavoriteHorse[] {
 export function saveFavoriteHorses(favorites: FavoriteHorse[]): void {
   const file = path.join(DATA_DIR, 'favorite-horses.json');
   writeJson(file, favorites);
+}
+
+// ── Purchased tickets ─────────────────────────────────────
+
+export function loadPurchasedTickets(raceId: string): PurchasedTicket[] {
+  const file = path.join(DATA_DIR, 'purchased-tickets', `${keyToFileName(raceId)}.json`);
+  return readJson<PurchasedTicket[]>(file) ?? [];
+}
+
+export function savePurchasedTickets(raceId: string, tickets: PurchasedTicket[]): void {
+  const file = path.join(DATA_DIR, 'purchased-tickets', `${keyToFileName(raceId)}.json`);
+  writeJson(file, tickets);
 }

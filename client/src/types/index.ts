@@ -137,6 +137,20 @@ export interface UpdateResult {
   totalRaces: number;
 }
 
+export type TicketType = '単勝' | '複勝' | '枠連' | '馬連' | '馬単' | 'ワイド' | '3連複' | '3連単';
+export type PurchaseType = '通常' | 'ボックス' | 'フォーメーション';
+
+export interface PurchasedTicket {
+  id: string;
+  ticketType: TicketType;
+  purchaseType: PurchaseType;
+  selections: number[];
+  formationSelections?: number[][];
+  unitAmount: number;
+  payoutAmount?: number;
+  createdAt: string;
+}
+
 // Navigation state
 export type View =
   | { type: 'calendar' }

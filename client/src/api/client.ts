@@ -2,6 +2,7 @@ import axios from 'axios';
 import {
   Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick,
   HorseSearchResult, RaceMeta, FavoriteHorse, HorseMemo, DeletedRaceEvent,
+  PurchasedTicket, TicketType, PurchaseType,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
@@ -108,4 +109,37 @@ export async function fetchHorseMemo(horseId: string): Promise<HorseMemo> {
 export async function saveHorseMemo(horseId: string, note: string): Promise<HorseMemo> {
   const { data } = await api.put<HorseMemo>(`/horses/${horseId}/memo`, { note });
   return data;
+}
+
+export async function fetchPurchasedRaceIds(): Promise<string[]> {
+  const { data } = await api.get<string[]>('/tickets/purchased-race-ids');
+  return data;
+}
+
+export async function fetchPurchasedTickets(raceId: string): Promise<PurchasedTicket[]> {
+  const { data } = await api.get<PurchasedTicket[]>(`/tickets/${encodeURIComponent(raceId)}`);
+  return data;
+}
+
+export async function addPurchasedTicket(
+  raceId: string,
+  payload: {
+    ticketType: TicketType;
+    purchaseType: PurchaseType;
+    selections: number[];
+    formationSelections?: number[][];
+    unitAmount: number;
+  },
+): Promise<PurchasedTicket> {
+  const { data } = await api.post<PurchasedTicket>(`/tickets/${encodeURIComponent(raceId)}`, payload);
+  return data;
+}
+
+export async function updateTicketPayout(raceId: string, ticketId: string, payoutAmount: number | undefined): Promise<PurchasedTicket> {
+  const { data } = await api.patch<PurchasedTicket>(`/tickets/${encodeURIComponent(raceId)}/${encodeURIComponent(ticketId)}`, { payoutAmount });
+  return data;
+}
+
+export async function deletePurchasedTicket(raceId: string, ticketId: string): Promise<void> {
+  await api.delete(`/tickets/${encodeURIComponent(raceId)}/${encodeURIComponent(ticketId)}`);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FavoriteHorse, HorseSearchResult, RaceScheduleDay, View } from '../../types';
-import { fetchFavoriteHorses, fetchSchedule, searchHorse } from '../../api/client';
+import { fetchFavoriteHorses, fetchPurchasedRaceIds, fetchSchedule, searchHorse } from '../../api/client';
 import RacePanel from './RacePanel';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
@@ -34,6 +34,9 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
   const [schedule, setSchedule] = useState<RaceScheduleDay[]>([]);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
 
+  const [purchasedRaceIds, setPurchasedRaceIds] = useState<Set<string>>(new Set());
+  const [purchasedDates, setPurchasedDates] = useState<Set<string>>(new Set());
+
   const [showHorseSearch, setShowHorseSearch] = useState(false);
   const [horseQuery, setHorseQuery] = useState('');
   const [horseSearching, setHorseSearching] = useState(false);
@@ -53,6 +56,20 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
       .catch(err => console.error('Schedule fetch error:', err))
       .finally(() => setLoadingSchedule(false));
   }, [year, month]);
+
+  useEffect(() => {
+    fetchPurchasedRaceIds().then(ids => {
+      setPurchasedRaceIds(new Set(ids));
+      const dates = new Set<string>();
+      for (const id of ids) {
+        if (/^\d{12}$/.test(id)) {
+          // YYYYMMDDTTRR → YYYY-MM-DD
+          dates.add(`${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}`);
+        }
+      }
+      setPurchasedDates(dates);
+    }).catch(() => undefined);
+  }, []);
 
   function openHorseSearch() {
     setHorseQuery('');
@@ -248,18 +265,21 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
                         }`}
                       >
                         {/* Day number */}
-                        <div className={`text-sm font-medium mb-1 w-6 h-6 flex items-center justify-center rounded-full ${
-                          isToday
-                            ? 'bg-red-500 text-white'
-                            : isSelected
-                            ? 'bg-blue-500 text-white'
-                            : di === 5
-                            ? 'text-blue-600'
-                            : di === 6
-                            ? 'text-red-600'
-                            : 'text-gray-700'
-                        }`}>
-                          {day}
+                        <div className="flex items-center gap-0.5 mb-1">
+                          <div className={`text-sm font-medium w-6 h-6 flex items-center justify-center rounded-full ${
+                            isToday
+                              ? 'bg-red-500 text-white'
+                              : isSelected
+                              ? 'bg-blue-500 text-white'
+                              : di === 5
+                              ? 'text-blue-600'
+                              : di === 6
+                              ? 'text-red-600'
+                              : 'text-gray-700'
+                          }`}>
+                            {day}
+                          </div>
+                          {purchasedDates.has(dateStr) && <span className="text-xs leading-none" title="購入馬券あり">💴</span>}
                         </div>
 
                         {/* Track badges */}
@@ -290,6 +310,7 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
         <RacePanel
           selectedDate={selectedDate}
           isScheduledRaceDay={selectedDate ? !!raceDayMap.get(selectedDate) : false}
+          purchasedRaceIds={purchasedRaceIds}
           onNavigate={onNavigate}
         />
       </div>
