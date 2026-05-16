@@ -131,10 +131,7 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
       .then(data => {
         setRaces(data);
 
-        // Only fetch picks for past/today races where odds data exists
-        const today = new Date().toISOString().slice(0, 10);
-        if (selectedDate > today) return;
-
+        // Predictions can be published before race day, so try every detailed race.
         const raceIds = data.filter(r => /^\d{12}$/.test(r.id)).map(r => r.id);
         if (raceIds.length === 0) return;
 

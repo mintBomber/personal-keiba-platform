@@ -48,6 +48,16 @@ export interface Race {
   picks: RacePick;
 }
 
+export interface RaceMeta {
+  name: string;
+  startTime?: string;
+  horseCount?: number;
+  distance?: number;
+  surface?: 'turf' | 'dirt';
+  direction?: string;
+  grade?: string;
+}
+
 export interface HorseEntry {
   gateNumber: number;
   horseNumber: number;
@@ -62,6 +72,13 @@ export interface HorseEntry {
   jockeyId: string;
   trainer: string;
   trainerId: string;
+  odds?: string;
+  popularity?: number;
+}
+
+export interface HorseSearchResult {
+  horseId: string;
+  horseName: string;
 }
 
 export interface HorseRaceHistory {

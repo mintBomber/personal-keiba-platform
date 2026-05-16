@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { RaceScheduleDay, View } from '../../types';
-import { fetchSchedule } from '../../api/client';
+import { useEffect, useRef, useState } from 'react';
+import { HorseSearchResult, RaceScheduleDay, View } from '../../types';
+import { fetchSchedule, searchHorse } from '../../api/client';
 import RacePanel from './RacePanel';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
@@ -34,6 +34,13 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
   const [schedule, setSchedule] = useState<RaceScheduleDay[]>([]);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
 
+  const [showHorseSearch, setShowHorseSearch] = useState(false);
+  const [horseQuery, setHorseQuery] = useState('');
+  const [horseSearching, setHorseSearching] = useState(false);
+  const [horseSearchError, setHorseSearchError] = useState<string | null>(null);
+  const [horseSearchResults, setHorseSearchResults] = useState<HorseSearchResult[] | null>(null);
+  const horseInputRef = useRef<HTMLInputElement>(null);
+
   const todayStr = toDateString(today.getFullYear(), today.getMonth() + 1, today.getDate());
 
   useEffect(() => {
@@ -43,6 +50,44 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
       .catch(err => console.error('Schedule fetch error:', err))
       .finally(() => setLoadingSchedule(false));
   }, [year, month]);
+
+  function openHorseSearch() {
+    setHorseQuery('');
+    setHorseSearchError(null);
+    setHorseSearchResults(null);
+    setShowHorseSearch(true);
+    setTimeout(() => horseInputRef.current?.focus(), 50);
+  }
+
+  function closeHorseSearch() {
+    setShowHorseSearch(false);
+    setHorseQuery('');
+    setHorseSearchError(null);
+    setHorseSearchResults(null);
+  }
+
+  async function handleHorseSearch() {
+    const name = horseQuery.trim();
+    if (!name || horseSearching) return;
+    setHorseSearching(true);
+    setHorseSearchError(null);
+    setHorseSearchResults(null);
+    try {
+      const results = await searchHorse(name);
+      if (results.length === 0) {
+        setHorseSearchError('該当する馬は登録されていません');
+      } else if (results.length === 1) {
+        closeHorseSearch();
+        onNavigate({ type: 'horseDetail', horseId: results[0].horseId, horseName: results[0].horseName, backView: { type: 'calendar' } });
+      } else {
+        setHorseSearchResults(results);
+      }
+    } catch {
+      setHorseSearchError('該当する馬は登録されていません');
+    } finally {
+      setHorseSearching(false);
+    }
+  }
 
   function prevMonth() {
     if (month === 1) { setYear(y => y - 1); setMonth(12); }
@@ -79,12 +124,20 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
       <div className="flex flex-col w-2/3 min-w-0 border-r border-gray-300">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 flex-shrink-0">
-          <button
-            onClick={onNavigateSettings}
-            className="text-sm px-3 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition"
-          >
-            設定
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onNavigateSettings}
+              className="text-sm px-3 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition"
+            >
+              設定
+            </button>
+            <button
+              onClick={openHorseSearch}
+              className="text-sm px-3 py-1 rounded bg-green-100 hover:bg-green-200 text-green-700 border border-green-200 transition"
+            >
+              馬
+            </button>
+          </div>
 
           <div className="flex items-center gap-2">
             <button
@@ -215,6 +268,64 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
           onNavigate={onNavigate}
         />
       </div>
+
+      {/* Horse search popup */}
+      {showHorseSearch && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+          onClick={(e) => { if (e.target === e.currentTarget) closeHorseSearch(); }}
+        >
+          <div className="bg-white rounded-xl shadow-xl p-5 w-80">
+            <h3 className="font-bold text-gray-800 mb-3 text-base">馬名で検索</h3>
+            <input
+              ref={horseInputRef}
+              type="text"
+              value={horseQuery}
+              onChange={e => { setHorseQuery(e.target.value); setHorseSearchError(null); setHorseSearchResults(null); }}
+              onKeyDown={e => { if (e.key === 'Enter') handleHorseSearch(); if (e.key === 'Escape') closeHorseSearch(); }}
+              placeholder="馬名を入力..."
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+            />
+            {horseSearchError && (
+              <p className="text-red-500 text-xs mb-3">{horseSearchError}</p>
+            )}
+            {horseSearchResults && horseSearchResults.length > 0 && (
+              <div className="mb-3">
+                <p className="text-xs text-gray-500 mb-1">候補 {horseSearchResults.length}件</p>
+                <div className="max-h-72 overflow-y-auto bg-gray-100 rounded-lg p-2">
+                {horseSearchResults.map(h => (
+                  <div
+                    key={h.horseId}
+                    className="px-2 py-1.5 hover:bg-gray-200 cursor-pointer rounded text-sm text-gray-800 transition"
+                    onClick={() => {
+                      closeHorseSearch();
+                      onNavigate({ type: 'horseDetail', horseId: h.horseId, horseName: h.horseName, backView: { type: 'calendar' } });
+                    }}
+                  >
+                    {h.horseName}
+                  </div>
+                ))}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={closeHorseSearch}
+                className="px-3 py-1.5 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleHorseSearch}
+                disabled={horseSearching || !horseQuery.trim()}
+                className="px-4 py-1.5 text-sm rounded-lg bg-blue-500 hover:bg-blue-600 text-white transition disabled:opacity-50"
+              >
+                {horseSearching ? '検索中...' : '検索'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

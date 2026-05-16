@@ -189,6 +189,123 @@ function deriveJapaneseRaceAge(birthDate: string): number {
   return age > 0 ? age : 0;
 }
 
+function encodeEucJpQuery(value: string): string {
+  const eucBuffer = iconv.encode(value, 'EUC-JP') as Buffer;
+  return Array.from(eucBuffer)
+    .map(b => `%${b.toString(16).toUpperCase().padStart(2, '0')}`)
+    .join('');
+}
+
+function extractDirectHorse($: cheerio.CheerioAPI, responseUrl: string): { horseId: string; horseName: string } | null {
+  const horseId = responseUrl.match(/\/horse\/(\d+)\/?/)?.[1];
+  if (!horseId) return null;
+
+  const horseName =
+    $('div.horse_title h1').text().trim() ||
+    $('h1').first().text().trim() ||
+    $('title').text().split(/[|｜(（]/)[0].trim();
+
+  return horseName ? { horseId, horseName } : null;
+}
+
+function extractHorseSearchResults($: cheerio.CheerioAPI): { horseId: string; horseName: string }[] {
+  const results: { horseId: string; horseName: string }[] = [];
+  const seen = new Set<string>();
+
+  $('table.race_table_01 tr').each((_, row) => {
+    const link = $(row).find('a[href^="/horse/"]').first();
+    const href = link.attr('href') ?? '';
+    const horseId = href.match(/^\/horse\/(\d+)\/?$/)?.[1];
+    const horseName = (link.attr('title') ?? link.text()).trim();
+    if (!horseId || !horseName || seen.has(horseId)) return;
+
+    seen.add(horseId);
+    results.push({ horseId, horseName });
+  });
+
+  return results;
+}
+
+function extractLastPage($: cheerio.CheerioAPI): number {
+  let lastPage = 1;
+  $('.common_pager a[href*="page="]').each((_, link) => {
+    const href = $(link).attr('href') ?? '';
+    const page = parseInt(href.match(/[?&]page=(\d+)/)?.[1] ?? '', 10);
+    if (Number.isInteger(page) && page > lastPage) lastPage = page;
+  });
+  return lastPage;
+}
+
+async function fetchHorseSearchPage(
+  encodedName: string,
+  filter: 'active' | 'retired',
+  page = 1,
+): Promise<{
+  results: { horseId: string; horseName: string }[];
+  lastPage: number;
+  direct: { horseId: string; horseName: string } | null;
+}> {
+  const filterParam = filter === 'active' ? '&act=1' : '&retired=1';
+  const url = `${BASE}/?pid=horse_list&word=${encodedName}&match=partial_match&sort=prize&list=100${filterParam}&page=${page}`;
+  const res = await axios.get<ArrayBuffer>(url, {
+    headers: HEADERS,
+    responseType: 'arraybuffer',
+    maxRedirects: 5,
+    timeout: 20000,
+  });
+  const html = iconv.decode(Buffer.from(res.data), 'EUC-JP');
+  const $ = cheerio.load(html);
+  const responseUrl = res.request?.res?.responseUrl ?? url;
+  const direct = extractDirectHorse($, responseUrl);
+  if (direct) return { results: [direct], lastPage: 1, direct };
+
+  return {
+    results: extractHorseSearchResults($),
+    lastPage: extractLastPage($),
+    direct: null,
+  };
+}
+
+async function searchHorseByFilter(
+  encodedName: string,
+  filter: 'active' | 'retired',
+): Promise<{ horseId: string; horseName: string }[]> {
+  const first = await fetchHorseSearchPage(encodedName, filter);
+  if (first.direct) return first.results;
+
+  const byId = new Map<string, string>();
+  for (const result of first.results) byId.set(result.horseId, result.horseName);
+
+  const pages = Array.from({ length: Math.max(0, first.lastPage - 1) }, (_, i) => i + 2);
+  const batchSize = 4;
+  for (let i = 0; i < pages.length; i += batchSize) {
+    const batch = pages.slice(i, i + batchSize);
+    const fetched = await Promise.all(batch.map(page =>
+      fetchHorseSearchPage(encodedName, filter, page).catch(() => null)
+    ));
+    for (const pageResult of fetched) {
+      for (const result of pageResult?.results ?? []) {
+        byId.set(result.horseId, result.horseName);
+      }
+    }
+  }
+
+  return [...byId.entries()].map(([horseId, horseName]) => ({ horseId, horseName }));
+}
+
+// Search active horses first, then retired/unregistered horses when active search misses.
+export async function searchHorse(name: string): Promise<{ horseId: string; horseName: string }[]> {
+  const encodedName = encodeEucJpQuery(name);
+
+  try {
+    const activeResults = await searchHorseByFilter(encodedName, 'active');
+    if (activeResults.length > 0) return activeResults;
+    return await searchHorseByFilter(encodedName, 'retired');
+  } catch {
+    return [];
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function findTableValue($: cheerio.CheerioAPI, label: string): string | undefined {
   let result: string | undefined;

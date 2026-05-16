@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Race, RacePick, HorseEntry, View } from '../../types';
-import { fetchPicks, fetchShutuba } from '../../api/client';
+import { Race, RacePick, HorseEntry, View, RaceMeta } from '../../types';
+import { fetchPicks, fetchRaceMeta, fetchShutuba } from '../../api/client';
 
 const GATE_COLORS: Record<number, string> = {
   1: 'bg-white border-gray-400 text-gray-800',
@@ -67,6 +67,19 @@ function SortTh({
 
 function hasPrediction(picks: RacePick): boolean {
   return picks.honmei !== '---' || picks.taikou !== '---' || picks.tanana !== '---';
+}
+
+function mergeRaceMeta(race: Race, meta: RaceMeta): Race {
+  return {
+    ...race,
+    name: meta.name || race.name,
+    startTime: meta.startTime ?? race.startTime,
+    horseCount: meta.horseCount ?? race.horseCount,
+    distance: meta.distance ?? race.distance,
+    surface: meta.surface ?? race.surface,
+    direction: meta.direction ?? race.direction,
+    grade: meta.grade ?? race.grade,
+  };
 }
 
 function PickHorseName({
@@ -152,20 +165,32 @@ function PredictionCard({
 }
 
 export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
+  const [displayRace, setDisplayRace] = useState<Race>(race);
   const [entries, setEntries] = useState<HorseEntry[]>([]);
   const [picks, setPicks] = useState<RacePick>(race.picks ?? EMPTY_PICKS);
   const [picksLoading, setPicksLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
 
   useEffect(() => {
     if (!race.id) { setError('レースIDがありません'); setLoading(false); return; }
+    setDisplayRace(race);
+    setError(null);
+    setLoading(true);
     fetchShutuba(race.id)
       .then(setEntries)
       .catch(() => setError('出馬表の取得に失敗しました'))
       .finally(() => setLoading(false));
+  }, [race.id]);
+
+  useEffect(() => {
+    if (!/^\d{12}$/.test(race.id)) return;
+    fetchRaceMeta(race.id)
+      .then(meta => setDisplayRace(current => mergeRaceMeta(current, meta)))
+      .catch(() => undefined);
   }, [race.id]);
 
   useEffect(() => {
@@ -179,13 +204,34 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
       .finally(() => setPicksLoading(false));
   }, [race.id, race.picks]);
 
+  async function handleRefresh() {
+    if (refreshing || !race.id) return;
+    setRefreshing(true);
+    setPicksLoading(true);
+    try {
+      const [fresh, meta, refreshedPicks] = await Promise.all([
+        fetchShutuba(race.id, true),
+        fetchRaceMeta(race.id).catch(() => null),
+        fetchPicks(race.id, true).catch(() => null),
+      ]);
+      setEntries(fresh);
+      if (meta) setDisplayRace(current => mergeRaceMeta(current, meta));
+      if (refreshedPicks) setPicks(refreshedPicks);
+    } catch {
+      // silently ignore; show stale data
+    } finally {
+      setPicksLoading(false);
+      setRefreshing(false);
+    }
+  }
+
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortAsc(a => !a);
     else { setSortKey(key); setSortAsc(true); }
   }
 
-  const surface = race.surface === 'dirt' ? 'ダ' : '芝';
-  const isPastRace = race.date < new Date().toISOString().slice(0, 10);
+  const surface = displayRace.surface === 'dirt' ? 'ダ' : '芝';
+  const isPastRace = displayRace.date < new Date().toISOString().slice(0, 10);
   const hasPlacements = entries.some(e => e.placement);
   const showPlacement = isPastRace || hasPlacements;
 
@@ -196,20 +242,31 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex-shrink-0">
-        <div className="flex items-center gap-3 mb-1">
-          <button onClick={onBack} className="text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition">
-            ← 戻る
-          </button>
-          <h1 className="font-bold text-gray-900">
-            {race.racecourse} 第{race.raceNumber}レース
-          </h1>
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-3">
+            <button onClick={onBack} className="text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition">
+              ← 戻る
+            </button>
+            <h1 className="font-bold text-gray-900">
+              {displayRace.racecourse} 第{displayRace.raceNumber}レース
+            </h1>
+          </div>
+          {/^\d{12}$/.test(race.id) && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing || loading}
+              className="text-sm px-3 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition disabled:opacity-50"
+            >
+              {refreshing ? '更新中...' : '更新'}
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap gap-3 text-sm text-gray-600 pl-1">
-          <span className="font-medium text-gray-800">{race.name}</span>
-          {race.grade && <span className="text-red-600 font-bold">{race.grade}</span>}
-          <span>{race.startTime}</span>
-          <span>{surface}{race.distance}m</span>
-          {race.horseCount > 0 && <span>{race.horseCount}頭</span>}
+          <span className="font-medium text-gray-800">{displayRace.name}</span>
+          {displayRace.grade && <span className="text-red-600 font-bold">{displayRace.grade}</span>}
+          {displayRace.startTime && <span>{displayRace.startTime}</span>}
+          {displayRace.distance > 0 && <span>{surface}{displayRace.distance}m{displayRace.direction ? ` ${displayRace.direction}` : ''}</span>}
+          {displayRace.horseCount > 0 && <span>{displayRace.horseCount}頭</span>}
         </div>
       </div>
 
@@ -251,6 +308,8 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
                   <SortTh label="斤量(差)" col="weight" sortKey={sortKey} asc={sortAsc} onSort={handleSort} className="hidden sm:table-cell" />
                   <th className="px-2 py-2 text-left text-xs font-semibold text-gray-500">騎手</th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-gray-500 hidden md:table-cell">調教師</th>
+                  <th className="px-2 py-2 text-center text-xs font-semibold text-gray-500 whitespace-nowrap">オッズ</th>
+                  <th className="px-2 py-2 text-center text-xs font-semibold text-gray-500 whitespace-nowrap">人気</th>
                 </tr>
               </thead>
               <tbody>
@@ -307,6 +366,17 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
                       <td className="px-2 py-2 text-gray-700 text-xs">{horse.jockey || '-'}</td>
                       {/* 調教師 */}
                       <td className="px-2 py-2 text-gray-600 text-xs hidden md:table-cell">{horse.trainer || '-'}</td>
+                      {/* オッズ・人気 */}
+                      <td className="px-2 py-2 text-center text-xs text-gray-700 font-medium">
+                        {horse.odds ?? '-'}
+                      </td>
+                      <td className="px-2 py-2 text-center text-xs">
+                        {horse.popularity != null ? (
+                          <span className={`font-bold ${horse.popularity === 1 ? 'text-red-600' : horse.popularity === 2 ? 'text-blue-600' : horse.popularity === 3 ? 'text-green-600' : 'text-gray-600'}`}>
+                            {horse.popularity}人気
+                          </span>
+                        ) : '-'}
+                      </td>
                     </tr>
                   );
                 })}

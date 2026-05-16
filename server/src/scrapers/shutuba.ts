@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import iconv from 'iconv-lite';
-import { HorseEntry } from '../types';
+import { HorseEntry, RaceMeta } from '../types';
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
@@ -16,6 +16,58 @@ async function fetchEucJp(url: string): Promise<string> {
     timeout: 15000,
   });
   return iconv.decode(Buffer.from(res.data), 'EUC-JP');
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function parseGrade($: cheerio.CheerioAPI): string {
+  const cls = $('h1.RaceName [class*="Icon_GradeType"]').first().attr('class') ?? '';
+  if (cls.includes('GradeType1')) return 'G1';
+  if (cls.includes('GradeType2')) return 'G2';
+  if (cls.includes('GradeType3')) return 'G3';
+  if (cls.includes('GradeType15')) return 'L';
+  return '';
+}
+
+function cleanOdds(value: string): string | undefined {
+  const odds = normalizeText(value);
+  if (!odds) return undefined;
+  if (!/\d/.test(odds)) return undefined;
+  if (/^[\-\*]+(?:\.[\-\*]+)?$/.test(odds)) return undefined;
+  return odds;
+}
+
+function parsePopularity(value: string): number | undefined {
+  const popularity = parseInt(normalizeText(value), 10);
+  return popularity > 0 ? popularity : undefined;
+}
+
+export async function scrapeRaceMeta(raceId: string): Promise<RaceMeta> {
+  const url = `https://race.netkeiba.com/race/shutuba.html?race_id=${raceId}`;
+  const html = await fetchEucJp(url);
+  const $ = cheerio.load(html);
+
+  const raceName = normalizeText(
+    $('h1.RaceName').first().clone().children().remove().end().text()
+  );
+  const raceData = normalizeText($('.RaceData01').first().text());
+  const raceData2 = normalizeText($('.RaceData02').first().text());
+  const startTime = raceData.match(/(\d{1,2}:\d{2})発走/)?.[1];
+  const course = raceData.match(/(芝|ダ|ダート)(\d+)m/) ?? null;
+  const direction = raceData.match(/\((右|左|直線|右外|左外)[^)]*\)/)?.[1];
+  const horseCount = parseInt(raceData2.match(/(\d+)頭/)?.[1] ?? '', 10) || undefined;
+
+  return {
+    name: raceName,
+    startTime,
+    horseCount,
+    distance: course ? parseInt(course[2], 10) : undefined,
+    surface: course ? (course[1] === '芝' ? 'turf' : 'dirt') : undefined,
+    direction,
+    grade: parseGrade($),
+  };
 }
 
 // Shutuba page structure (EUC-JP):
@@ -67,19 +119,32 @@ export async function scrapeShutuba(raceId: string): Promise<HorseEntry[]> {
     const trainerIdMatch = trainerHref.match(/trainer\/(?:result\/recent\/)?(\d+)/);
     const trainerId = trainerIdMatch ? trainerIdMatch[1] : '';
 
+    // オッズ (単勝) and 人気 — only available after betting opens
+    const odds = cleanOdds(
+      row.find('td.Odds').first().text() ||
+      row.find('span.Odds').first().text()
+    );
+    const popularity = parsePopularity(
+      row.find('td.Popular_Ninki').first().text() ||
+      row.find('td.Ninki').first().text()
+    );
+
     if (horseNumber > 0 && horseName) {
-      entries.push({ gateNumber, horseNumber, horseId, horseName, sex, age, weight, jockey, jockeyId, trainer, trainerId });
+      entries.push({ gateNumber, horseNumber, horseId, horseName, sex, age, weight, jockey, jockeyId, trainer, trainerId, odds, popularity });
     }
   });
 
   entries.sort((a, b) => a.horseNumber - b.horseNumber);
 
   if (entries.length > 0) {
-    const placements = await fetchPlacements(raceId);
-    if (placements.size > 0) {
+    const stats = await fetchResultStats(raceId);
+    if (stats.size > 0) {
       entries.forEach(e => {
-        const pl = placements.get(e.horseNumber);
-        if (pl) e.placement = pl;
+        const stat = stats.get(e.horseNumber);
+        if (!stat) return;
+        if (stat.placement) e.placement = stat.placement;
+        if (!e.odds && stat.odds) e.odds = stat.odds;
+        if (e.popularity == null && stat.popularity != null) e.popularity = stat.popularity;
       });
     }
   }
@@ -90,11 +155,11 @@ export async function scrapeShutuba(raceId: string): Promise<HorseEntry[]> {
 // Fetch finishing positions from race result page.
 // result.html uses EUC-JP. Current rows use td.Result_Num .Rank for 着順
 // and td.Num.Txt_C for 馬番.
-async function fetchPlacements(raceId: string): Promise<Map<number, string>> {
+async function fetchResultStats(raceId: string): Promise<Map<number, Pick<HorseEntry, 'placement' | 'odds' | 'popularity'>>> {
   const url = `https://race.netkeiba.com/race/result.html?race_id=${raceId}`;
-  const placements = new Map<number, string>();
+  const stats = new Map<number, Pick<HorseEntry, 'placement' | 'odds' | 'popularity'>>();
   try {
-    console.log(`Fetching result for placements: ${url}`);
+    console.log(`Fetching result stats: ${url}`);
     const html = await fetchEucJp(url);
     const $ = cheerio.load(html);
 
@@ -112,12 +177,22 @@ async function fetchPlacements(raceId: string): Promise<Map<number, string>> {
         parseInt(row.find('td.Num.Txt_C').first().text().trim(), 10) ||
         parseInt(row.find('td[class*="Umaban"]').first().text().trim(), 10);
 
-      if (horseNumber > 0 && placement) {
-        placements.set(horseNumber, placement);
+      const odds = cleanOdds(
+        row.find('td.Odds').first().text() ||
+        row.find('span.Odds').first().text()
+      );
+      const popularity = parsePopularity(
+        row.find('td.Popular_Ninki').first().text() ||
+        row.find('td.Ninki').first().text() ||
+        row.find('td.Popular').first().text()
+      );
+
+      if (horseNumber > 0 && (placement || odds || popularity != null)) {
+        stats.set(horseNumber, { placement, odds, popularity });
       }
     });
   } catch (err) {
-    console.error(`fetchPlacements error (${raceId}):`, err);
+    console.error(`fetchResultStats error (${raceId}):`, err);
   }
-  return placements;
+  return stats;
 }

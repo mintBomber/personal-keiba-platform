@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getRacePicks } from '../scrapers/netkeiba';
+import { cache } from '../cache';
 
 const router = Router();
 
@@ -15,6 +16,9 @@ router.get('/:raceId', async (req: Request, res: Response) => {
   }
 
   try {
+    if (req.query.refresh === 'true' || req.query.refresh === '1') {
+      cache.delete(`picks:${raceId}`);
+    }
     const picks = await getRacePicks(raceId);
     res.json(picks);
   } catch (err) {

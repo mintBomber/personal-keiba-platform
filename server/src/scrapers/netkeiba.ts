@@ -19,7 +19,10 @@ interface YosoApiItem {
   goods_kbn?: string;
   common_yid?: string;
   yosoka_name?: string;
-  mark?: Record<string, string>;
+  mark?: Record<string, string> | string;
+  yoso_id?: string;
+  yosoka_id?: string;
+  is_paid_only?: string;
 }
 
 interface YosoApiResponse {
@@ -421,11 +424,13 @@ function cleanYosokaName(name: string): string {
     .trim();
 }
 
+function hasStructuredMarks(mark: YosoApiItem['mark']): mark is Record<string, string> {
+  return Boolean(mark && typeof mark === 'object' && !Array.isArray(mark));
+}
+
 function pickFreeYosoItem(items: YosoApiItem[]): YosoApiItem | null {
-  const freeKinds = new Set(['no1_free', 'umai_free']);
   const candidates = items.filter(item =>
-    item.mark &&
-    freeKinds.has(item.goods_kbn ?? '') &&
+    hasStructuredMarks(item.mark) &&
     Object.values(item.mark).some(mark => ['1', '2', '3', '4'].includes(mark))
   );
   if (candidates.length === 0) return null;
@@ -433,14 +438,28 @@ function pickFreeYosoItem(items: YosoApiItem[]): YosoApiItem | null {
   candidates.sort((a, b) => {
     const score = (item: YosoApiItem): number => {
       const name = cleanYosokaName(item.yosoka_name ?? '');
-      if (name.includes('CP予想') || item.common_yid === 'N12') return 30;
-      if (name.includes('本紙')) return 20;
+      if (name.includes('CP予想') || item.common_yid === 'N12') return 100;
+      if (name.includes('本紙')) return 90;
+      if (['no1_free', 'umai_free'].includes(item.goods_kbn ?? '')) return 50;
       return 10;
     };
     return score(b) - score(a);
   });
 
   return candidates[0];
+}
+
+function pickDetailYosoItems(items: YosoApiItem[]): YosoApiItem[] {
+  const score = (item: YosoApiItem): number => {
+    const name = cleanYosokaName(item.yosoka_name ?? '');
+    if (item.yoso_id && item.goods_kbn === 'umai_free') return 100;
+    if (item.yoso_id && item.goods_kbn === 'umai_sell' && item.is_paid_only !== '1') return 80;
+    if (item.yosoka_id && item.goods_kbn === 'no1_free') return name.includes('CP予想') ? 70 : 60;
+    return 0;
+  };
+  return items
+    .filter(item => score(item) > 0)
+    .sort((a, b) => score(b) - score(a));
 }
 
 async function fetchYosoHorseNames(raceId: string): Promise<Map<number, string>> {
@@ -487,32 +506,86 @@ async function getYosoPredictionPicks(raceId: string): Promise<RacePick | null> 
     });
 
     if (res.data.status !== 'OK') return null;
-    const item = pickFreeYosoItem(res.data.data?.ary_item ?? []);
-    if (!item?.mark) return null;
+    const items = res.data.data?.ary_item ?? [];
+    const item = pickFreeYosoItem(items);
 
-    const horseNames = await fetchYosoHorseNames(raceId);
-    const nameForMark = (markCode: string): string => {
-      const horseNumber = Object.entries(item.mark ?? {})
-        .find(([, mark]) => mark === markCode)?.[0];
-      if (!horseNumber) return '---';
-      return horseNames.get(parseInt(horseNumber, 10)) ?? `馬番${horseNumber}`;
-    };
+    if (item && hasStructuredMarks(item.mark)) {
+      const horseNames = await fetchYosoHorseNames(raceId);
+      const nameForMark = (markCode: string): string => {
+        const horseNumber = Object.entries(item.mark as Record<string, string>)
+          .find(([, mark]) => mark === markCode)?.[0];
+        if (!horseNumber) return '---';
+        return horseNames.get(parseInt(horseNumber, 10)) ?? `馬番${horseNumber}`;
+      };
 
-    const honmei = nameForMark('1');
-    const taikou = nameForMark('2');
-    const tanana = nameForMark('3') !== '---' ? nameForMark('3') : nameForMark('4');
-    if (honmei === '---' && taikou === '---' && tanana === '---') return null;
+      const honmei = nameForMark('1');
+      const taikou = nameForMark('2');
+      const tanana = nameForMark('3') !== '---' ? nameForMark('3') : nameForMark('4');
+      if (honmei !== '---' || taikou !== '---' || tanana !== '---') {
+        const sourceName = cleanYosokaName(item.yosoka_name ?? '予想印') || '予想印';
+        return {
+          honmei,
+          taikou,
+          tanana,
+          source: `netkeiba ${sourceName}`,
+        };
+      }
+    }
 
-    const sourceName = cleanYosokaName(item.yosoka_name ?? '予想印') || '予想印';
-    return {
-      honmei,
-      taikou,
-      tanana,
-      source: `netkeiba ${sourceName}`,
-    };
+    for (const detailItem of pickDetailYosoItems(items)) {
+      const detailPicks = await fetchYosoDetailPicks(raceId, detailItem);
+      if (detailPicks) return detailPicks;
+    }
   } catch {
     return null;
   }
+  return null;
+}
+
+async function fetchYosoDetailPicks(raceId: string, item: YosoApiItem): Promise<RacePick | null> {
+  const sourceName = cleanYosokaName(item.yosoka_name ?? '予想印') || '予想印';
+  const urls: string[] = [];
+  if (item.yoso_id) {
+    urls.push(`${RACE_SP_URL.replace('race.sp', 'yoso.sp')}/?pid=yoso_detail&id=${item.yoso_id}&rf=mark_list_yoso_detail`);
+  }
+  if (item.yosoka_id) {
+    urls.push(`${RACE_SP_URL}/?pid=yoso_pro_opinion_detail&race_id=${raceId}&yosoka_id=${item.yosoka_id}`);
+  }
+
+  for (const url of urls) {
+    try {
+      const html = await fetchEucJp(url);
+      const $ = cheerio.load(html);
+      const byClass: Record<string, string> = {};
+      $('table.YosoShirushiTable01 tr').each((_, row) => {
+        const markClass = $(row).find('[class*="Icon_"]').attr('class') ?? '';
+        const horseName = $(row).find('td a[href*="horse_id="], td a[href*="/horse/"]').first().text().trim();
+        if (!horseName) return;
+        if (markClass.includes('Icon_Honmei')) byClass.honmei = horseName;
+        else if (markClass.includes('Icon_Taikou')) byClass.taikou = horseName;
+        else if (
+          markClass.includes('Icon_Kurosan') ||
+          markClass.includes('Icon_Tanana') ||
+          markClass.includes('Icon_Osae')
+        ) {
+          byClass.tanana ??= horseName;
+        }
+      });
+
+      if (byClass.honmei || byClass.taikou || byClass.tanana) {
+        return {
+          honmei: byClass.honmei ?? '---',
+          taikou: byClass.taikou ?? '---',
+          tanana: byClass.tanana ?? '---',
+          source: `netkeiba ${sourceName}`,
+        };
+      }
+    } catch {
+      // Try the next detail URL.
+    }
+  }
+
+  return null;
 }
 
 export async function getRacePicks(raceId: string): Promise<RacePick> {
@@ -539,13 +612,34 @@ export async function getRacePicks(raceId: string): Promise<RacePick> {
     const html = await fetchEucJp(url);
     const $ = cheerio.load(html);
 
+    const markMap: Record<string, string> = {};
     const entries: { name: string; ninki: number }[] = [];
     $('tr.HorseList').each((_, el) => {
       const row = $(el);
       const name = row.find('span.HorseName a').first().text().trim();
-      const ninki = parseInt(row.find('td.Ninki').first().text().trim(), 10);
-      if (name && ninki > 0) entries.push({ name, ninki });
+      const ninki = parseInt(row.find('td.Ninki, td.Popular').first().text().trim(), 10);
+      if (name && !isNaN(ninki) && ninki > 0) entries.push({ name, ninki });
+
+      const markText = row.find('td.Mark, span.Mark, td.Yoso').text().trim();
+      if (name) {
+        if (markText.includes('◎')) markMap['◎'] = name;
+        else if (markText.includes('〇') || markText.includes('○')) markMap['〇'] = name;
+        else if (markText.includes('▲')) markMap['▲'] = name;
+        else if (markText.includes('△')) markMap['△'] = name;
+      }
     });
+
+    if (markMap['◎'] || markMap['〇']) {
+      const picks: RacePick = {
+        honmei: markMap['◎'] ?? '---',
+        taikou: markMap['〇'] ?? '---',
+        tanana: markMap['▲'] ?? markMap['△'] ?? '---',
+        source: 'netkeiba 印',
+      };
+      const ttl = isPast ? 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
+      cache.set(cacheKey, picks, ttl);
+      return picks;
+    }
 
     if (entries.length === 0) {
       return { honmei: '---', taikou: '---', tanana: '---' };

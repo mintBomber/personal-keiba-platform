@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick } from '../types';
+import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick, HorseSearchResult, RaceMeta } from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 // Update can take several minutes (3 years of data on first run)
@@ -29,8 +29,13 @@ export async function runUpdate(): Promise<UpdateResult> {
   return data;
 }
 
-export async function fetchShutuba(raceId: string): Promise<HorseEntry[]> {
-  const { data } = await api.get<HorseEntry[]>(`/shutuba/${raceId}`);
+export async function fetchShutuba(raceId: string, refresh = false): Promise<HorseEntry[]> {
+  const { data } = await api.get<HorseEntry[]>(`/shutuba/${raceId}${refresh ? '?refresh=true' : ''}`);
+  return data;
+}
+
+export async function fetchRaceMeta(raceId: string): Promise<RaceMeta> {
+  const { data } = await api.get<RaceMeta>(`/shutuba/meta/${raceId}`);
   return data;
 }
 
@@ -39,7 +44,12 @@ export async function fetchHorse(horseId: string): Promise<HorseDetail> {
   return data;
 }
 
-export async function fetchPicks(raceId: string): Promise<RacePick> {
-  const { data } = await api.get<RacePick>(`/picks/${raceId}`);
+export async function fetchPicks(raceId: string, refresh = false): Promise<RacePick> {
+  const { data } = await api.get<RacePick>(`/picks/${raceId}${refresh ? '?refresh=true' : ''}`);
+  return data;
+}
+
+export async function searchHorse(name: string): Promise<HorseSearchResult[]> {
+  const { data } = await api.get<HorseSearchResult[]>(`/horses/search?name=${encodeURIComponent(name)}`);
   return data;
 }
