@@ -211,7 +211,7 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
     try {
       const [fresh, meta, refreshedPicks] = await Promise.all([
         fetchShutuba(race.id, true),
-        fetchRaceMeta(race.id).catch(() => null),
+        fetchRaceMeta(race.id, true).catch(() => null),
         fetchPicks(race.id, true).catch(() => null),
       ]);
       setEntries(fresh);

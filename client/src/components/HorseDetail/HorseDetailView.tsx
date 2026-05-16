@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { HorseDetail, HorseRaceHistory, View } from '../../types';
-import { fetchHorse } from '../../api/client';
+import { addFavoriteHorse, fetchFavoriteHorses, fetchHorse, removeFavoriteHorse } from '../../api/client';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
@@ -173,31 +173,90 @@ function PerformanceChart({ races }: { races: HorseRaceHistory[] }) {
 export default function HorseDetailView({ horseId, horseName, onBack }: Props) {
   const [detail, setDetail] = useState<HorseDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [favorite, setFavorite] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     fetchHorse(horseId)
       .then(setDetail)
       .catch(() => setError('馬情報の取得に失敗しました'))
       .finally(() => setLoading(false));
   }, [horseId]);
 
+  useEffect(() => {
+    fetchFavoriteHorses()
+      .then(favorites => setFavorite(favorites.some(h => h.horseId === horseId)))
+      .catch(() => undefined);
+  }, [horseId]);
+
   const displayName = detail?.horseName || horseName;
+
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const fresh = await fetchHorse(horseId, true);
+      setDetail(fresh);
+      if (favorite) await addFavoriteHorse(horseId, fresh.horseName || horseName);
+    } catch {
+      setError('馬情報の更新に失敗しました');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handleToggleFavorite() {
+    const next = !favorite;
+    setFavorite(next);
+    try {
+      if (next) {
+        await addFavoriteHorse(horseId, displayName);
+      } else {
+        await removeFavoriteHorse(horseId);
+      }
+    } catch {
+      setFavorite(!next);
+    }
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition"
-          >
-            ← 戻る
-          </button>
-          <h1 className="font-bold text-gray-900 text-lg">{displayName}</h1>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={onBack}
+              className="text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 transition"
+            >
+              ← 戻る
+            </button>
+            <h1 className="font-bold text-gray-900 text-lg truncate">{displayName}</h1>
+            <button
+              onClick={handleToggleFavorite}
+              className={`w-8 h-8 rounded-full text-lg leading-none transition ${
+                favorite ? 'text-yellow-500 bg-yellow-50 hover:bg-yellow-100' : 'text-gray-300 bg-gray-50 hover:bg-gray-100'
+              }`}
+              title={favorite ? 'お気に入りから外す' : 'お気に入りに追加'}
+            >
+              ★
+            </button>
+            {detail && (
+              <span className="text-sm text-gray-500 whitespace-nowrap">{detail.sex}{detail.age}歳</span>
+            )}
+          </div>
           {detail && (
-            <span className="text-sm text-gray-500">{detail.sex}{detail.age}歳</span>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="text-sm px-3 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition disabled:opacity-50 whitespace-nowrap"
+            >
+              {refreshing ? '更新中...' : '更新'}
+            </button>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { scrapeRaceMeta, scrapeShutuba } from '../scrapers/shutuba';
-import { loadShutuba, saveShutuba, loadHorse } from '../store';
+import { loadHorse, loadRaceMeta, loadShutuba, saveRaceMeta, saveShutuba } from '../store';
 import { HorseEntry } from '../types';
 
 const router = Router();
@@ -33,13 +33,24 @@ function hasUsableCachedEntries(raceId: string, entries: HorseEntry[]): boolean 
 // GET /api/shutuba/meta/:raceId
 router.get('/meta/:raceId', async (req: Request, res: Response) => {
   const { raceId } = req.params;
+  const forceRefresh = req.query.refresh === 'true' || req.query.refresh === '1';
   if (!/^\d{12}$/.test(raceId)) {
     res.status(400).json({ error: 'Invalid race ID' });
     return;
   }
 
   try {
-    res.json(await scrapeRaceMeta(raceId));
+    if (!forceRefresh) {
+      const stored = loadRaceMeta(raceId);
+      if (stored) {
+        res.json(stored);
+        return;
+      }
+    }
+
+    const meta = await scrapeRaceMeta(raceId);
+    saveRaceMeta(raceId, meta);
+    res.json(meta);
   } catch (err) {
     console.error('Race meta fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch race metadata' });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { HorseSearchResult, RaceScheduleDay, View } from '../../types';
-import { fetchSchedule, searchHorse } from '../../api/client';
+import { FavoriteHorse, HorseSearchResult, RaceScheduleDay, View } from '../../types';
+import { fetchFavoriteHorses, fetchSchedule, searchHorse } from '../../api/client';
 import RacePanel from './RacePanel';
 
 const WEEKDAYS = ['月', '火', '水', '木', '金', '土', '日'];
@@ -39,6 +39,9 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
   const [horseSearching, setHorseSearching] = useState(false);
   const [horseSearchError, setHorseSearchError] = useState<string | null>(null);
   const [horseSearchResults, setHorseSearchResults] = useState<HorseSearchResult[] | null>(null);
+  const [showFavoriteHorses, setShowFavoriteHorses] = useState(false);
+  const [favoriteHorses, setFavoriteHorses] = useState<FavoriteHorse[]>([]);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
   const horseInputRef = useRef<HTMLInputElement>(null);
 
   const todayStr = toDateString(today.getFullYear(), today.getMonth() + 1, today.getDate());
@@ -55,6 +58,7 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
     setHorseQuery('');
     setHorseSearchError(null);
     setHorseSearchResults(null);
+    setShowFavoriteHorses(false);
     setShowHorseSearch(true);
     setTimeout(() => horseInputRef.current?.focus(), 50);
   }
@@ -64,6 +68,26 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
     setHorseQuery('');
     setHorseSearchError(null);
     setHorseSearchResults(null);
+    setShowFavoriteHorses(false);
+  }
+
+  async function handleToggleFavoriteList() {
+    const next = !showFavoriteHorses;
+    setShowFavoriteHorses(next);
+    setHorseSearchError(null);
+    setHorseSearchResults(null);
+    if (!next) return;
+
+    setFavoriteLoading(true);
+    try {
+      const favorites = await fetchFavoriteHorses();
+      setFavoriteHorses(favorites);
+    } catch {
+      setFavoriteHorses([]);
+      setHorseSearchError('お気に入り馬を取得できませんでした');
+    } finally {
+      setFavoriteLoading(false);
+    }
   }
 
   async function handleHorseSearch() {
@@ -72,6 +96,7 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
     setHorseSearching(true);
     setHorseSearchError(null);
     setHorseSearchResults(null);
+    setShowFavoriteHorses(false);
     try {
       const results = await searchHorse(name);
       if (results.length === 0) {
@@ -276,12 +301,23 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
           onClick={(e) => { if (e.target === e.currentTarget) closeHorseSearch(); }}
         >
           <div className="bg-white rounded-xl shadow-xl p-5 w-80">
-            <h3 className="font-bold text-gray-800 mb-3 text-base">馬名で検索</h3>
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={handleToggleFavoriteList}
+                className={`w-8 h-8 rounded-full text-lg leading-none transition ${
+                  showFavoriteHorses ? 'text-yellow-500 bg-yellow-50' : 'text-gray-300 bg-gray-50 hover:bg-gray-100'
+                }`}
+                title="お気に入り馬"
+              >
+                ★
+              </button>
+              <h3 className="font-bold text-gray-800 text-base">馬名で検索</h3>
+            </div>
             <input
               ref={horseInputRef}
               type="text"
               value={horseQuery}
-              onChange={e => { setHorseQuery(e.target.value); setHorseSearchError(null); setHorseSearchResults(null); }}
+              onChange={e => { setHorseQuery(e.target.value); setHorseSearchError(null); setHorseSearchResults(null); setShowFavoriteHorses(false); }}
               onKeyDown={e => { if (e.key === 'Enter') handleHorseSearch(); if (e.key === 'Escape') closeHorseSearch(); }}
               placeholder="馬名を入力..."
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
@@ -293,18 +329,43 @@ export default function CalendarView({ onNavigateSettings, onNavigate }: Props) 
               <div className="mb-3">
                 <p className="text-xs text-gray-500 mb-1">候補 {horseSearchResults.length}件</p>
                 <div className="max-h-72 overflow-y-auto bg-gray-100 rounded-lg p-2">
-                {horseSearchResults.map(h => (
-                  <div
-                    key={h.horseId}
-                    className="px-2 py-1.5 hover:bg-gray-200 cursor-pointer rounded text-sm text-gray-800 transition"
-                    onClick={() => {
-                      closeHorseSearch();
-                      onNavigate({ type: 'horseDetail', horseId: h.horseId, horseName: h.horseName, backView: { type: 'calendar' } });
-                    }}
-                  >
-                    {h.horseName}
-                  </div>
-                ))}
+                  {horseSearchResults.map(h => (
+                    <div
+                      key={h.horseId}
+                      className="px-2 py-1.5 hover:bg-gray-200 cursor-pointer rounded text-sm text-gray-800 transition"
+                      onClick={() => {
+                        closeHorseSearch();
+                        onNavigate({ type: 'horseDetail', horseId: h.horseId, horseName: h.horseName, backView: { type: 'calendar' } });
+                      }}
+                    >
+                      {h.horseName}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {showFavoriteHorses && (
+              <div className="mb-3">
+                <p className="text-xs text-gray-500 mb-1">お気に入り馬</p>
+                <div className="max-h-72 overflow-y-auto bg-yellow-50 rounded-lg p-2 border border-yellow-100">
+                  {favoriteLoading ? (
+                    <p className="px-2 py-2 text-sm text-gray-500">読み込み中...</p>
+                  ) : favoriteHorses.length > 0 ? (
+                    favoriteHorses.map(h => (
+                      <div
+                        key={h.horseId}
+                        className="px-2 py-1.5 hover:bg-yellow-100 cursor-pointer rounded text-sm text-gray-800 transition"
+                        onClick={() => {
+                          closeHorseSearch();
+                          onNavigate({ type: 'horseDetail', horseId: h.horseId, horseName: h.horseName, backView: { type: 'calendar' } });
+                        }}
+                      >
+                        <span className="text-yellow-500 mr-1">★</span>{h.horseName}
+                      </div>
+                    ))
+                  ) : (
+                    <p className="px-2 py-2 text-sm text-gray-500">お気に入り馬はまだありません</p>
+                  )}
                 </div>
               </div>
             )}

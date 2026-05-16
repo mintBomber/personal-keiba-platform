@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick, HorseSearchResult, RaceMeta } from '../types';
+import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick, HorseSearchResult, RaceMeta, FavoriteHorse } from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 // Update can take several minutes (3 years of data on first run)
@@ -34,13 +34,13 @@ export async function fetchShutuba(raceId: string, refresh = false): Promise<Hor
   return data;
 }
 
-export async function fetchRaceMeta(raceId: string): Promise<RaceMeta> {
-  const { data } = await api.get<RaceMeta>(`/shutuba/meta/${raceId}`);
+export async function fetchRaceMeta(raceId: string, refresh = false): Promise<RaceMeta> {
+  const { data } = await api.get<RaceMeta>(`/shutuba/meta/${raceId}${refresh ? '?refresh=true' : ''}`);
   return data;
 }
 
-export async function fetchHorse(horseId: string): Promise<HorseDetail> {
-  const { data } = await api.get<HorseDetail>(`/horses/${horseId}`);
+export async function fetchHorse(horseId: string, refresh = false): Promise<HorseDetail> {
+  const { data } = await api.get<HorseDetail>(`/horses/${horseId}${refresh ? '?refresh=true' : ''}`);
   return data;
 }
 
@@ -52,4 +52,18 @@ export async function fetchPicks(raceId: string, refresh = false): Promise<RaceP
 export async function searchHorse(name: string): Promise<HorseSearchResult[]> {
   const { data } = await api.get<HorseSearchResult[]>(`/horses/search?name=${encodeURIComponent(name)}`);
   return data;
+}
+
+export async function fetchFavoriteHorses(): Promise<FavoriteHorse[]> {
+  const { data } = await api.get<FavoriteHorse[]>('/horses/favorites');
+  return data;
+}
+
+export async function addFavoriteHorse(horseId: string, horseName: string): Promise<FavoriteHorse> {
+  const { data } = await api.post<FavoriteHorse>(`/horses/favorites/${horseId}`, { horseName });
+  return data;
+}
+
+export async function removeFavoriteHorse(horseId: string): Promise<void> {
+  await api.delete(`/horses/favorites/${horseId}`);
 }

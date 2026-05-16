@@ -49,6 +49,12 @@ export interface RaceMeta {
   grade?: string;
 }
 
+export interface FavoriteHorse {
+  horseId: string;
+  horseName: string;
+  addedAt: string;
+}
+
 export interface HorseEntry {
   gateNumber: number;
   horseNumber: number;
