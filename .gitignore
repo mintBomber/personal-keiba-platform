@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+*.js.map
+.env
+.env.local
+
+# Data files (scraped cache — do not commit)
+server/data/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+node_modules
