@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Race, HorseEntry, View } from '../../types';
-import { fetchShutuba } from '../../api/client';
+import { Race, RacePick, HorseEntry, View } from '../../types';
+import { fetchPicks, fetchShutuba } from '../../api/client';
 
 const GATE_COLORS: Record<number, string> = {
   1: 'bg-white border-gray-400 text-gray-800',
@@ -18,6 +18,8 @@ const PLACEMENT_COLOR: Record<string, string> = {
   '2': 'text-gray-500 font-semibold',
   '3': 'text-orange-500 font-semibold',
 };
+
+const EMPTY_PICKS: RacePick = { honmei: '---', taikou: '---', tanana: '---' };
 
 type SortKey = 'placement' | 'horseNumber' | 'weight';
 
@@ -63,8 +65,96 @@ function SortTh({
   );
 }
 
+function hasPrediction(picks: RacePick): boolean {
+  return picks.honmei !== '---' || picks.taikou !== '---' || picks.tanana !== '---';
+}
+
+function PickHorseName({
+  name, entries, onNavigate, backView,
+}: {
+  name: string;
+  entries: HorseEntry[];
+  onNavigate: (view: View) => void;
+  backView: View;
+}) {
+  const horse = entries.find(entry => entry.horseName === name);
+  if (!horse?.horseId) {
+    return <span className="font-semibold text-gray-800 truncate">{name}</span>;
+  }
+
+  return (
+    <button
+      onClick={() => onNavigate({ type: 'horseDetail', horseId: horse.horseId, horseName: horse.horseName, backView })}
+      className="font-semibold text-blue-700 hover:text-blue-900 hover:underline truncate text-left"
+    >
+      {name}
+    </button>
+  );
+}
+
+function PredictionCard({
+  picks, loading, entries, onNavigate, backView,
+}: {
+  picks: RacePick;
+  loading: boolean;
+  entries: HorseEntry[];
+  onNavigate: (view: View) => void;
+  backView: View;
+}) {
+  const source = picks.source ?? 'netkeiba';
+  const rows = [
+    { mark: '◎', label: '本命', name: picks.honmei, color: 'text-red-600 bg-red-50 border-red-100' },
+    { mark: '○', label: '対抗', name: picks.taikou, color: 'text-blue-600 bg-blue-50 border-blue-100' },
+    { mark: '△', label: '単穴', name: picks.tanana, color: 'text-green-700 bg-green-50 border-green-100' },
+  ];
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-4 overflow-hidden">
+      <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+        <h2 className="text-sm font-bold text-gray-800">有望馬予想</h2>
+        <span className="text-xs text-gray-500">{source}</span>
+      </div>
+      <div className="p-3">
+        {loading ? (
+          <div className="flex items-center text-sm text-gray-500">
+            <div className="animate-spin rounded-full h-4 w-4 border-2 border-green-500 border-t-transparent mr-2" />
+            予想を取得中...
+          </div>
+        ) : hasPrediction(picks) ? (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {rows.map(row => (
+              <div key={row.mark} className={`border rounded-md px-3 py-2 ${row.color}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xl font-black leading-none">{row.mark}</span>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold opacity-80">{row.label}</p>
+                    {row.name !== '---' ? (
+                      <PickHorseName
+                        name={row.name}
+                        entries={entries}
+                        onNavigate={onNavigate}
+                        backView={backView}
+                      />
+                    ) : (
+                      <span className="font-semibold text-gray-400">未設定</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400">netkeibaの予想情報はまだ公開されていません</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
   const [entries, setEntries] = useState<HorseEntry[]>([]);
+  const [picks, setPicks] = useState<RacePick>(race.picks ?? EMPTY_PICKS);
+  const [picksLoading, setPicksLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
@@ -77,6 +167,17 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
       .catch(() => setError('出馬表の取得に失敗しました'))
       .finally(() => setLoading(false));
   }, [race.id]);
+
+  useEffect(() => {
+    setPicks(race.picks ?? EMPTY_PICKS);
+    if (!/^\d{12}$/.test(race.id)) return;
+
+    setPicksLoading(true);
+    fetchPicks(race.id)
+      .then(setPicks)
+      .catch(() => setPicks(race.picks ?? EMPTY_PICKS))
+      .finally(() => setPicksLoading(false));
+  }, [race.id, race.picks]);
 
   function handleSort(key: SortKey) {
     if (sortKey === key) setSortAsc(a => !a);
@@ -114,6 +215,14 @@ export default function RaceDetailView({ race, onBack, onNavigate }: Props) {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
+        <PredictionCard
+          picks={picks}
+          loading={picksLoading}
+          entries={entries}
+          onNavigate={onNavigate}
+          backView={backView}
+        />
+
         {loading && (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-green-500 border-t-transparent" />

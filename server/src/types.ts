@@ -29,6 +29,7 @@ export interface RacePick {
   honmei: string;
   taikou: string;
   tanana: string;
+  source?: string;
 }
 
 export interface Race {

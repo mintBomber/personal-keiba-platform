@@ -6,6 +6,7 @@ import { cache } from '../cache';
 import { loadRaces } from '../store';
 
 const RACE_URL = 'https://race.netkeiba.com';
+const RACE_SP_URL = 'https://race.sp.netkeiba.com';
 const DB_URL   = 'https://db.netkeiba.com';
 
 const HEADERS = {
@@ -13,6 +14,20 @@ const HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
 };
+
+interface YosoApiItem {
+  goods_kbn?: string;
+  common_yid?: string;
+  yosoka_name?: string;
+  mark?: Record<string, string>;
+}
+
+interface YosoApiResponse {
+  status?: string;
+  data?: {
+    ary_item?: YosoApiItem[];
+  };
+}
 
 async function fetchEucJp(url: string): Promise<string> {
   const res = await axios.get<ArrayBuffer>(url, {
@@ -398,6 +413,108 @@ export async function getDayRaces(date: string, trackIds: string[], skipPicks = 
 //
 // Both pages use EUC-JP and tr.HorseList / span.HorseName a structure.
 // ============================================================
+function cleanYosokaName(name: string): string {
+  return name
+    .replace(/<br\s*\/?>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function pickFreeYosoItem(items: YosoApiItem[]): YosoApiItem | null {
+  const freeKinds = new Set(['no1_free', 'umai_free']);
+  const candidates = items.filter(item =>
+    item.mark &&
+    freeKinds.has(item.goods_kbn ?? '') &&
+    Object.values(item.mark).some(mark => ['1', '2', '3', '4'].includes(mark))
+  );
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    const score = (item: YosoApiItem): number => {
+      const name = cleanYosokaName(item.yosoka_name ?? '');
+      if (name.includes('CP予想') || item.common_yid === 'N12') return 30;
+      if (name.includes('本紙')) return 20;
+      return 10;
+    };
+    return score(b) - score(a);
+  });
+
+  return candidates[0];
+}
+
+async function fetchYosoHorseNames(raceId: string): Promise<Map<number, string>> {
+  const url = `${RACE_SP_URL}/yoso/mark_list.html?race_id=${raceId}&rf=race_toggle_menu`;
+  const html = await fetchEucJp(url);
+  const $ = cheerio.load(html);
+  const horseNumbers: number[] = [];
+  const names: string[] = [];
+
+  $('dt.CheckMarkCheck').next('dd').find('li.HorseList').each((_, el) => {
+    const id = $(el).attr('id') ?? '';
+    const num = parseInt(id.replace(/[^\d]/g, ''), 10);
+    if (num > 0) horseNumbers.push(num);
+  });
+
+  $('dl.Horse_Info dd li a').each((_, el) => {
+    const name = ($(el).attr('title') ?? $(el).text()).trim();
+    if (name) names.push(name);
+  });
+
+  const horseNameByNumber = new Map<number, string>();
+  horseNumbers.forEach((num, index) => {
+    if (names[index]) horseNameByNumber.set(num, names[index]);
+  });
+  return horseNameByNumber;
+}
+
+async function getYosoPredictionPicks(raceId: string): Promise<RacePick | null> {
+  try {
+    const url = `${RACE_SP_URL}/yoso/api_get_pro_yoso_list_v2.html`;
+    const res = await axios.get<YosoApiResponse>(url, {
+      headers: {
+        ...HEADERS,
+        'Accept': 'application/json,text/plain,*/*',
+        'Referer': `${RACE_SP_URL}/yoso/mark_list.html?race_id=${raceId}`,
+      },
+      params: {
+        input: 'UTF-8',
+        output: 'json',
+        race_id: raceId,
+        ref_type: '2',
+      },
+      timeout: 15000,
+    });
+
+    if (res.data.status !== 'OK') return null;
+    const item = pickFreeYosoItem(res.data.data?.ary_item ?? []);
+    if (!item?.mark) return null;
+
+    const horseNames = await fetchYosoHorseNames(raceId);
+    const nameForMark = (markCode: string): string => {
+      const horseNumber = Object.entries(item.mark ?? {})
+        .find(([, mark]) => mark === markCode)?.[0];
+      if (!horseNumber) return '---';
+      return horseNames.get(parseInt(horseNumber, 10)) ?? `馬番${horseNumber}`;
+    };
+
+    const honmei = nameForMark('1');
+    const taikou = nameForMark('2');
+    const tanana = nameForMark('3') !== '---' ? nameForMark('3') : nameForMark('4');
+    if (honmei === '---' && taikou === '---' && tanana === '---') return null;
+
+    const sourceName = cleanYosokaName(item.yosoka_name ?? '予想印') || '予想印';
+    return {
+      honmei,
+      taikou,
+      tanana,
+      source: `netkeiba ${sourceName}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function getRacePicks(raceId: string): Promise<RacePick> {
   const cacheKey = `picks:${raceId}`;
   const cached = cache.get<RacePick>(cacheKey);
@@ -412,6 +529,13 @@ export async function getRacePicks(raceId: string): Promise<RacePick> {
     : `${RACE_URL}/race/shutuba.html?race_id=${raceId}`;
 
   try {
+    const yosoPicks = await getYosoPredictionPicks(raceId);
+    if (yosoPicks) {
+      const ttl = isPast ? 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
+      cache.set(cacheKey, yosoPicks, ttl);
+      return yosoPicks;
+    }
+
     const html = await fetchEucJp(url);
     const $ = cheerio.load(html);
 
@@ -433,6 +557,7 @@ export async function getRacePicks(raceId: string): Promise<RacePick> {
       honmei: entries[0]?.name ?? '---',
       taikou: entries[1]?.name ?? '---',
       tanana: entries[2]?.name ?? '---',
+      source: 'netkeiba 人気順',
     };
 
     // Past picks are permanent; upcoming picks may change until post-time
