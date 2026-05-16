@@ -390,46 +390,57 @@ export async function getDayRaces(date: string, trackIds: string[], skipPicks = 
 }
 
 // ============================================================
-// PICKS  (from odds_get_form.html, UTF-8)
-// Structure:
-//   <table class="RaceOdds_HorseList_Table">
-//     <tr>
-//       <td class="Horse_Name">オーシャンステラ</td>
-//       <td class="Odds Popular"><span class="Odds" id="odds-1_01">---.-</span></td>
-//     </tr>
-//   </table>
+// PICKS  — 1番人気/2番人気/3番人気 by odds ranking
 //
-// Note: Odds are loaded dynamically (show "---.-" pre-race).
-// We return the first 3 entries by horse number as a placeholder.
+// Past races:  result.html has a td.Ninki column with race-day popularity rank.
+// Today/upcoming: shutuba.html shows td.Ninki once betting opens (race morning).
+//   If betting hasn't opened yet td.Ninki is absent → returns "---" for all three.
+//
+// Both pages use EUC-JP and tr.HorseList / span.HorseName a structure.
 // ============================================================
 export async function getRacePicks(raceId: string): Promise<RacePick> {
   const cacheKey = `picks:${raceId}`;
   const cached = cache.get<RacePick>(cacheKey);
   if (cached) return cached;
 
-  const url = `${RACE_URL}/odds/odds_get_form.html?type=b1&race_id=${raceId}`;
+  const raceDate = raceId.slice(0, 8); // YYYYMMDD
+  const todayNum = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const isPast = raceDate < todayNum;
+
+  const url = isPast
+    ? `${RACE_URL}/race/result.html?race_id=${raceId}`
+    : `${RACE_URL}/race/shutuba.html?race_id=${raceId}`;
 
   try {
-    const html = await fetchUtf8(url);
+    const html = await fetchEucJp(url);
     const $ = cheerio.load(html);
 
-    const horses: string[] = [];
-    $('td.Horse_Name').each((_, el) => {
-      const name = $(el).text().trim();
-      if (name) horses.push(name);
+    const entries: { name: string; ninki: number }[] = [];
+    $('tr.HorseList').each((_, el) => {
+      const row = $(el);
+      const name = row.find('span.HorseName a').first().text().trim();
+      const ninki = parseInt(row.find('td.Ninki').first().text().trim(), 10);
+      if (name && ninki > 0) entries.push({ name, ninki });
     });
 
+    if (entries.length === 0) {
+      return { honmei: '---', taikou: '---', tanana: '---' };
+    }
+
+    entries.sort((a, b) => a.ninki - b.ninki);
+
     const picks: RacePick = {
-      honmei: horses[0] ?? '未定',
-      taikou: horses[1] ?? '未定',
-      tanana: horses[2] ?? '未定',
+      honmei: entries[0]?.name ?? '---',
+      taikou: entries[1]?.name ?? '---',
+      tanana: entries[2]?.name ?? '---',
     };
 
-    // Short cache since horse order is by registration, not prediction
-    cache.set(cacheKey, picks, 60 * 60 * 1000);
+    // Past picks are permanent; upcoming picks may change until post-time
+    const ttl = isPast ? 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
+    cache.set(cacheKey, picks, ttl);
     return picks;
   } catch {
-    return { honmei: '取得不可', taikou: '取得不可', tanana: '取得不可' };
+    return { honmei: '---', taikou: '---', tanana: '---' };
   }
 }
 

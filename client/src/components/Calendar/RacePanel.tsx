@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Race, View } from '../../types';
-import { fetchRaces } from '../../api/client';
+import { useEffect, useRef, useState } from 'react';
+import { Race, RacePick, View } from '../../types';
+import { fetchRaces, fetchPicks } from '../../api/client';
 
 const SURFACE: Record<string, string> = { turf: '芝', dirt: 'ダ' };
 
@@ -27,7 +27,6 @@ interface Props {
   onNavigate: (view: View) => void;
 }
 
-// Group races by race number, return sorted map
 function groupByRaceNum(races: Race[]): Map<number, Race[]> {
   const map = new Map<number, Race[]>();
   for (const race of races) {
@@ -39,15 +38,17 @@ function groupByRaceNum(races: Race[]): Map<number, Race[]> {
 
 interface RaceRowProps {
   race: Race;
+  picks: RacePick | null;
   onNavigate: (view: View) => void;
 }
 
-function RaceRow({ race, onNavigate }: RaceRowProps) {
+function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
   const surface = SURFACE[race.surface] ?? race.surface;
+  const displayPicks = picks ?? race.picks;
+  const hasRealPicks = displayPicks.honmei !== '---';
 
   return (
     <div className="ml-2 mb-2">
-      {/* Track name + race info (clickable row) */}
       <button
         onClick={() => onNavigate({ type: 'raceDetail', raceId: race.id, race })}
         className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-all group"
@@ -66,21 +67,23 @@ function RaceRow({ race, onNavigate }: RaceRowProps) {
             <span className="text-xs text-gray-400">{race.horseCount}頭</span>
           )}
         </div>
-        {/* Picks */}
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs pl-1">
-          <span>
-            <span className="font-bold text-red-600">◎</span>
-            <span className="ml-0.5 text-gray-700">{race.picks.honmei}</span>
-          </span>
-          <span>
-            <span className="font-bold text-blue-600">〇</span>
-            <span className="ml-0.5 text-gray-700">{race.picks.taikou}</span>
-          </span>
-          <span>
-            <span className="font-bold text-green-600">△</span>
-            <span className="ml-0.5 text-gray-700">{race.picks.tanana}</span>
-          </span>
-        </div>
+        {/* Picks — only shown when odds data is available */}
+        {hasRealPicks && (
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs pl-1">
+            <span>
+              <span className="font-bold text-red-600">◎</span>
+              <span className="ml-0.5 text-gray-700">{displayPicks.honmei}</span>
+            </span>
+            <span>
+              <span className="font-bold text-blue-600">〇</span>
+              <span className="ml-0.5 text-gray-700">{displayPicks.taikou}</span>
+            </span>
+            <span>
+              <span className="font-bold text-green-600">△</span>
+              <span className="ml-0.5 text-gray-700">{displayPicks.tanana}</span>
+            </span>
+          </div>
+        )}
       </button>
     </div>
   );
@@ -88,17 +91,59 @@ function RaceRow({ race, onNavigate }: RaceRowProps) {
 
 export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate }: Props) {
   const [races, setRaces] = useState<Race[]>([]);
+  const [picksMap, setPicksMap] = useState<Map<string, RacePick>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!selectedDate) { setRaces([]); setError(null); return; }
+    if (!selectedDate) {
+      setRaces([]);
+      setPicksMap(new Map());
+      setError(null);
+      return;
+    }
+
+    // Cancel any in-flight picks fetch from a previous date
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
     setLoading(true);
+    setPicksMap(new Map());
     setError(null);
+
     fetchRaces(selectedDate)
-      .then(setRaces)
+      .then(data => {
+        setRaces(data);
+
+        // Only fetch picks for past/today races where odds data exists
+        const today = new Date().toISOString().slice(0, 10);
+        if (selectedDate > today) return;
+
+        const raceIds = data.filter(r => r.id).map(r => r.id);
+        if (raceIds.length === 0) return;
+
+        // Fetch all picks in parallel; ignore errors per race
+        Promise.all(
+          raceIds.map(id =>
+            fetchPicks(id)
+              .then(p => ({ id, p }) as { id: string; p: RacePick })
+              .catch(() => null)
+          )
+        ).then(results => {
+          if (ac.signal.aborted) return;
+          const map = new Map<string, RacePick>();
+          for (const r of results) {
+            if (r && r.p.honmei !== '---') map.set(r.id, r.p);
+          }
+          setPicksMap(map);
+        });
+      })
       .catch(() => setError('レース情報の取得に失敗しました'))
       .finally(() => setLoading(false));
+
+    return () => { ac.abort(); };
   }, [selectedDate]);
 
   const grouped = groupByRaceNum(races);
@@ -154,19 +199,17 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
           </div>
         )}
 
-        {/* Grouped by race number */}
         {!loading && !error && [...grouped.entries()].map(([raceNum, raceList]) => (
           <div key={raceNum} className="mb-3">
-            {/* Race number header */}
             <div className="px-3 py-1 bg-gray-200 sticky top-0 z-10">
               <span className="text-xs font-bold text-gray-600">第{raceNum}レース</span>
             </div>
-            {/* Each track's race */}
             <div className="px-1 pt-1">
               {raceList.map(race => (
                 <RaceRow
                   key={race.id}
                   race={race}
+                  picks={picksMap.get(race.id) ?? null}
                   onNavigate={onNavigate}
                 />
               ))}

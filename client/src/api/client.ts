@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult } from '../types';
+import { Race, RaceScheduleDay, Settings, HorseEntry, HorseDetail, UpdateResult, RacePick } from '../types';
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 });
 // Update can take several minutes (3 years of data on first run)
@@ -36,5 +36,10 @@ export async function fetchShutuba(raceId: string): Promise<HorseEntry[]> {
 
 export async function fetchHorse(horseId: string): Promise<HorseDetail> {
   const { data } = await api.get<HorseDetail>(`/horses/${horseId}`);
+  return data;
+}
+
+export async function fetchPicks(raceId: string): Promise<RacePick> {
+  const { data } = await api.get<RacePick>(`/picks/${raceId}`);
   return data;
 }
