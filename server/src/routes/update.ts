@@ -3,7 +3,7 @@ import path from 'path';
 import { Router, Request, Response } from 'express';
 import { loadSettings } from './settings';
 import { getMonthlySchedule, getDayRaces } from '../scrapers/netkeiba';
-import { getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
+import { getJraDayRaces, getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
 import { saveSchedule, saveRaces, loadRaces } from '../store';
 import { Race, RaceScheduleDay, UpdateResult } from '../types';
 import { cache } from '../cache';
@@ -107,7 +107,21 @@ function buildScheduleFromStoredRaces(
 
 function hasStoredRaceDetails(date: string): boolean {
   const races = loadRaces(date);
-  return races !== null && races.length > 0;
+  return races !== null && races.some(race => /^\d{12}$/.test(race.id));
+}
+
+function mergeOfficialFallbacks(races: Race[], officialRaces: Race[]): Race[] {
+  if (officialRaces.length === 0) return races;
+  const detailedTrackIds = new Set(
+    races
+      .filter(race => /^\d{12}$/.test(race.id))
+      .map(race => race.racecourseId)
+  );
+  const existingIds = new Set(races.map(race => race.id));
+  const supplements = officialRaces.filter(race =>
+    !detailedTrackIds.has(race.racecourseId) && !existingIds.has(race.id)
+  );
+  return [...races, ...supplements];
 }
 
 // POST /api/update
@@ -172,12 +186,22 @@ router.post('/', async (_req: Request, res: Response) => {
 
   await batchProcess(toFetch, async (date) => {
     try {
-      const races = await getDayRaces(date, favoriteTrackIds, true);
+      let races = await getDayRaces(date, favoriteTrackIds, true);
+      let source = 'netkeiba';
+      if (date >= today) {
+        const officialRaces = await getJraDayRaces(date, favoriteTrackIds);
+        const mergedRaces = mergeOfficialFallbacks(races, officialRaces);
+        if (mergedRaces.length > races.length) {
+          source = races.length > 0 ? 'netkeiba + JRA calendar' : 'JRA calendar';
+          races = mergedRaces;
+        }
+      }
+
       if (races.length > 0) {
         saveRaces(date, races);
         raceDays++;
         totalRaces += races.length;
-        console.log(`  ✓ ${date}: ${races.length} races`);
+        console.log(`  ✓ ${date}: ${races.length} races (${source})`);
       } else {
         console.log(`  - ${date}: race details not published yet`);
       }

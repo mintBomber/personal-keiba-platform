@@ -2,7 +2,8 @@ import { Router, Request, Response } from 'express';
 import { loadSettings } from './settings';
 import { loadSchedule, loadRaces, saveSchedule, saveRaces } from '../store';
 import { fetchRaw, getDayRaces, getMonthlySchedule } from '../scrapers/netkeiba';
-import { getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
+import { getJraDayRaces, getJraMonthlySchedule, mergeScheduleDays } from '../scrapers/jraCalendar';
+import { Race } from '../types';
 
 const router = Router();
 
@@ -11,6 +12,29 @@ function isCurrentOrFutureMonth(year: number, month: number): boolean {
   const currentKey = now.getFullYear() * 100 + now.getMonth() + 1;
   const requestedKey = year * 100 + month;
   return requestedKey >= currentKey;
+}
+
+function hasDetailedRaceIds(races: Race[]): boolean {
+  return races.some(race => /^\d{12}$/.test(race.id));
+}
+
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function mergeOfficialFallbacks(races: Race[], officialRaces: Race[]): Race[] {
+  if (officialRaces.length === 0) return races;
+  const detailedTrackIds = new Set(
+    races
+      .filter(race => /^\d{12}$/.test(race.id))
+      .map(race => race.racecourseId)
+  );
+  const existingIds = new Set(races.map(race => race.id));
+  const supplements = officialRaces.filter(race =>
+    !detailedTrackIds.has(race.racecourseId) && !existingIds.has(race.id)
+  );
+  return [...races, ...supplements];
 }
 
 // GET /api/schedule/:year/:month
@@ -57,7 +81,8 @@ router.get('/races/:date', async (req: Request, res: Response) => {
   }
 
   const stored = loadRaces(date);
-  if (stored && stored.length > 0) {
+  const today = todayStr();
+  if (date < today && stored && stored.length > 0 && hasDetailedRaceIds(stored)) {
     res.json(stored);
     return;
   }
@@ -65,11 +90,19 @@ router.get('/races/:date', async (req: Request, res: Response) => {
   try {
     const { favoriteTrackIds } = loadSettings();
     const races = await getDayRaces(date, favoriteTrackIds, true);
-    if (races.length > 0) saveRaces(date, races);
-    res.json(races);
+    const officialRaces = date >= today ? await getJraDayRaces(date, favoriteTrackIds) : [];
+    const baseRaces = races.length > 0 ? races : (stored ?? []);
+    const mergedRaces = mergeOfficialFallbacks(baseRaces, officialRaces);
+    if (mergedRaces.length > 0) {
+      saveRaces(date, mergedRaces);
+      res.json(mergedRaces);
+      return;
+    }
+
+    res.json(stored ?? []);
   } catch (err) {
     console.error(`Race fetch error ${date}:`, err);
-    res.json([]);
+    res.json(stored ?? []);
   }
 });
 

@@ -8,6 +8,7 @@ const GRADE_STYLE: Record<string, string> = {
   G1: 'bg-red-600 text-white',
   G2: 'bg-purple-600 text-white',
   G3: 'bg-blue-500 text-white',
+  'J・G3': 'bg-blue-500 text-white',
   L:  'bg-orange-400 text-white',
 };
 
@@ -46,45 +47,58 @@ function RaceRow({ race, picks, onNavigate }: RaceRowProps) {
   const surface = SURFACE[race.surface] ?? race.surface;
   const displayPicks = picks ?? race.picks;
   const hasRealPicks = displayPicks.honmei !== '---';
+  const hasDetailedPage = /^\d{12}$/.test(race.id);
+
+  const content = (
+    <>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className={`inline-block bg-green-700 text-white text-xs font-bold px-1.5 py-0.5 rounded ${hasDetailedPage ? 'group-hover:bg-blue-600 transition-colors' : ''}`}>
+          {race.racecourse}
+        </span>
+        {race.grade && <GradeBadge grade={race.grade} />}
+        <span className="text-sm font-medium text-gray-800 truncate max-w-[140px]">{race.name}</span>
+        {race.startTime && <span className="text-xs text-gray-500">{race.startTime}</span>}
+        {race.distance > 0 && (
+          <span className="text-xs text-gray-500">{surface}{race.distance}m</span>
+        )}
+        {race.horseCount > 0 && (
+          <span className="text-xs text-gray-400">{race.horseCount}頭</span>
+        )}
+      </div>
+      {/* Picks — only shown when odds data is available */}
+      {hasRealPicks && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs pl-1">
+          <span>
+            <span className="font-bold text-red-600">◎</span>
+            <span className="ml-0.5 text-gray-700">{displayPicks.honmei}</span>
+          </span>
+          <span>
+            <span className="font-bold text-blue-600">〇</span>
+            <span className="ml-0.5 text-gray-700">{displayPicks.taikou}</span>
+          </span>
+          <span>
+            <span className="font-bold text-green-600">△</span>
+            <span className="ml-0.5 text-gray-700">{displayPicks.tanana}</span>
+          </span>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className="ml-2 mb-2">
-      <button
-        onClick={() => onNavigate({ type: 'raceDetail', raceId: race.id, race })}
-        className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-all group"
-      >
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="inline-block bg-green-700 text-white text-xs font-bold px-1.5 py-0.5 rounded group-hover:bg-blue-600 transition-colors">
-            {race.racecourse}
-          </span>
-          {race.grade && <GradeBadge grade={race.grade} />}
-          <span className="text-sm font-medium text-gray-800 truncate max-w-[110px]">{race.name}</span>
-          {race.startTime && <span className="text-xs text-gray-500">{race.startTime}</span>}
-          {race.distance > 0 && (
-            <span className="text-xs text-gray-500">{surface}{race.distance}m</span>
-          )}
-          {race.horseCount > 0 && (
-            <span className="text-xs text-gray-400">{race.horseCount}頭</span>
-          )}
+      {hasDetailedPage ? (
+        <button
+          onClick={() => onNavigate({ type: 'raceDetail', raceId: race.id, race })}
+          className="w-full text-left px-2 py-1.5 rounded hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-all group"
+        >
+          {content}
+        </button>
+      ) : (
+        <div className="w-full text-left px-2 py-1.5 rounded border border-transparent bg-white">
+          {content}
         </div>
-        {/* Picks — only shown when odds data is available */}
-        {hasRealPicks && (
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs pl-1">
-            <span>
-              <span className="font-bold text-red-600">◎</span>
-              <span className="ml-0.5 text-gray-700">{displayPicks.honmei}</span>
-            </span>
-            <span>
-              <span className="font-bold text-blue-600">〇</span>
-              <span className="ml-0.5 text-gray-700">{displayPicks.taikou}</span>
-            </span>
-            <span>
-              <span className="font-bold text-green-600">△</span>
-              <span className="ml-0.5 text-gray-700">{displayPicks.tanana}</span>
-            </span>
-          </div>
-        )}
-      </button>
+      )}
     </div>
   );
 }
@@ -121,7 +135,7 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
         const today = new Date().toISOString().slice(0, 10);
         if (selectedDate > today) return;
 
-        const raceIds = data.filter(r => r.id).map(r => r.id);
+        const raceIds = data.filter(r => /^\d{12}$/.test(r.id)).map(r => r.id);
         if (raceIds.length === 0) return;
 
         // Fetch all picks in parallel; ignore errors per race
@@ -202,12 +216,14 @@ export default function RacePanel({ selectedDate, isScheduledRaceDay, onNavigate
         {!loading && !error && [...grouped.entries()].map(([raceNum, raceList]) => (
           <div key={raceNum} className="mb-3">
             <div className="px-3 py-1 bg-gray-200 sticky top-0 z-10">
-              <span className="text-xs font-bold text-gray-600">第{raceNum}レース</span>
+              <span className="text-xs font-bold text-gray-600">
+                {raceNum > 0 ? `第${raceNum}レース` : '開催予定'}
+              </span>
             </div>
             <div className="px-1 pt-1">
               {raceList.map(race => (
                 <RaceRow
-                  key={race.id}
+                  key={race.id || `${race.racecourseId}-${race.name}`}
                   race={race}
                   picks={picksMap.get(race.id) ?? null}
                   onNavigate={onNavigate}
